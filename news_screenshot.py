@@ -26,7 +26,7 @@ os.makedirs(NOTE_FOLDER, exist_ok=True)
 MISSING_LOG_FILE = os.path.join(NOTE_FOLDER, "missing_logos.txt")
 SETTINGS_FILE = os.path.join(NOTE_FOLDER, "settings.json")
 SUPPORTED_LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".jfif")
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 UPDATE_INFO_URL = "https://raw.githubusercontent.com/deepndense-sketch/PrintNews/main/version.json"
 
 # ---------------- Config ----------------
@@ -219,7 +219,9 @@ def logo_name_candidates(name):
     names = []
     cleaned = (name or "").strip()
     base_name = base_logo_name(cleaned)
-    for candidate in (cleaned, base_name, base_name + ".com"):
+    parts = cleaned.split(".") if cleaned else []
+    country_name = base_name + "-" + parts[-1] if len(parts) > 2 else ""
+    for candidate in (cleaned, base_name, country_name, base_name + ".com"):
         if candidate:
             names.append(candidate)
     return list(dict.fromkeys(names))
@@ -396,6 +398,7 @@ try:
     messagebox.showinfo("Render Complete", "Render is done.")
 except Exception:
     pass
+
 
 
 
