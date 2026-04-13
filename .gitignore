@@ -1,0 +1,17 @@
+﻿build/
+dist/
+Note/settings.json
+Note/missing_logos.txt
+Render/
+*.png
+!NewsLogos/*.png
+!NewsLogos/*.jpg
+!NewsLogos/*.jpeg
+!NewsLogos/*.webp
+!NewsLogos/*.bmp
+!NewsLogos/*.gif
+!NewsLogos/*.tif
+!NewsLogos/*.tiff
+!NewsLogos/*.ico
+!NewsLogos/*.jfif
+__pycache__/
