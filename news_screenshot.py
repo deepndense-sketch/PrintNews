@@ -28,7 +28,7 @@ os.makedirs(NOTE_FOLDER, exist_ok=True)
 MISSING_LOG_FILE = os.path.join(NOTE_FOLDER, "missing_logos.txt")
 SETTINGS_FILE = os.path.join(NOTE_FOLDER, "settings.json")
 SUPPORTED_LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".jfif")
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 UPDATE_INFO_URL = "https://raw.githubusercontent.com/deepndense-sketch/PrintNews/main/version.json"
 GITHUB_LOGO_API_URL = "https://api.github.com/repos/deepndense-sketch/PrintNews/contents/NewsLogos?ref=main"
 
@@ -74,14 +74,15 @@ def check_for_updates(show_current=False):
         if latest_version and is_newer_version(latest_version, APP_VERSION):
             notes = str(info.get("notes", "")).strip()
             download_url = str(info.get("download_url", "")).strip()
-            message = f"Current version: {APP_VERSION}\nNew update version: {latest_version}"
+            message = f"Update available to version {latest_version}.\n\nCurrent version: {APP_VERSION}\nLatest version: {latest_version}"
             if notes:
                 message += f"\n\nWhat is updated:\n{notes}"
             if download_url:
                 message += f"\n\nDownload/update link:\n{download_url}"
             messagebox.showinfo("Update Available", message)
         elif show_current:
-            messagebox.showinfo("No Update", f"You are using the latest version: {APP_VERSION}")
+            latest_label = latest_version or "unknown"
+            messagebox.showinfo("No Update", f"No update available.\n\nCurrent version: {APP_VERSION}\nLatest version: {latest_label}")
     except Exception:
         if show_current:
             messagebox.showwarning("Update Check Failed", "Could not check for updates right now.")
