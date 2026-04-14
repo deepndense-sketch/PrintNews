@@ -2,7 +2,9 @@
 import re
 import sys
 import json
-from urllib.parse import urlparse
+import threading
+import webbrowser
+from urllib.parse import quote_plus, urlparse
 from tkinter import Tk, Label, Entry, Button, filedialog, StringVar, messagebox
 from PIL import Image, ImageDraw, ImageFont
 from docx import Document
@@ -26,8 +28,9 @@ os.makedirs(NOTE_FOLDER, exist_ok=True)
 MISSING_LOG_FILE = os.path.join(NOTE_FOLDER, "missing_logos.txt")
 SETTINGS_FILE = os.path.join(NOTE_FOLDER, "settings.json")
 SUPPORTED_LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".jfif")
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 UPDATE_INFO_URL = "https://raw.githubusercontent.com/deepndense-sketch/PrintNews/main/version.json"
+GITHUB_LOGO_API_URL = "https://api.github.com/repos/deepndense-sketch/PrintNews/contents/NewsLogos?ref=main"
 
 # ---------------- Config ----------------
 PADDING_TOP = 20
@@ -79,6 +82,70 @@ def check_for_updates():
             messagebox.showinfo("Update Available", message)
     except Exception:
         pass
+
+
+def sync_logos_from_github():
+    try:
+        os.makedirs(LOGO_FOLDER, exist_ok=True)
+        existing = {name.lower() for name in os.listdir(LOGO_FOLDER)}
+        response = requests.get(GITHUB_LOGO_API_URL, headers={"User-Agent": "PrintNews"}, timeout=10)
+        response.raise_for_status()
+        remote_files = response.json()
+        downloaded = []
+        skipped = 0
+
+        for item in remote_files:
+            filename = item.get("name", "")
+            if not filename.lower().endswith(SUPPORTED_LOGO_EXTENSIONS):
+                continue
+            if filename.lower() in existing:
+                skipped += 1
+                continue
+            download_url = item.get("download_url")
+            if not download_url:
+                continue
+
+            logo_response = requests.get(download_url, headers={"User-Agent": "PrintNews"}, timeout=20)
+            logo_response.raise_for_status()
+            save_path = os.path.join(LOGO_FOLDER, filename)
+            if os.path.exists(save_path):
+                skipped += 1
+                existing.add(filename.lower())
+                continue
+            with open(save_path, "wb") as f:
+                f.write(logo_response.content)
+            existing.add(filename.lower())
+            downloaded.append(filename)
+
+        return downloaded, skipped, None
+    except Exception as e:
+        return [], 0, e
+
+
+def show_logo_sync_result(downloaded, skipped, error):
+    if error:
+        messagebox.showwarning("Logo Sync Failed", f"Could not sync logos from GitHub.\n\n{error}")
+        return
+
+    message = f"Logo sync complete.\n\nDownloaded: {len(downloaded)}\nAlready had: {skipped}"
+    if downloaded:
+        message += "\n\nNew logos:\n" + "\n".join(downloaded[:30])
+        if len(downloaded) > 30:
+            message += f"\n...and {len(downloaded) - 30} more"
+    messagebox.showinfo("Logo Sync", message)
+
+
+def run_logo_sync_thread():
+    downloaded, skipped, error = sync_logos_from_github()
+    root.after(0, show_logo_sync_result, downloaded, skipped, error)
+
+
+def ask_sync_logos():
+    if messagebox.askyesno(
+        "Sync Logos",
+        "Sync missing logos from GitHub?\n\nOnly logo files that are not already in your NewsLogos folder will be downloaded. Existing files will not be replaced.",
+    ):
+        threading.Thread(target=run_logo_sync_thread, daemon=True).start()
 # ---------------- GUI ----------------
 file_path = None
 output_path = None
@@ -145,6 +212,7 @@ root.title(f"News Image Generator v{APP_VERSION}")
 root.geometry("620x170")
 root.resizable(False, False)
 root.after(200, check_for_updates)
+root.after(700, ask_sync_logos)
 
 word_var = StringVar(value=settings.get("last_word_file", ""))
 output_var = StringVar(value=settings.get("last_output_folder", ""))
@@ -291,21 +359,65 @@ def get_logo(source, url=None):
     return img, True
 
 # ---------------- Fonts ----------------
-try:
-    FONT_PATH = "C:/Windows/Fonts/arial.ttf"
-    font_head = ImageFont.truetype(FONT_PATH, FONT_SIZE_HEADLINE)
-    font_date = ImageFont.truetype(FONT_PATH, FONT_SIZE_DATE)
-    font_source = ImageFont.truetype(FONT_PATH, FONT_SIZE_SOURCE)
-    font_sub_head = ImageFont.truetype(FONT_PATH, int(FONT_SIZE_HEADLINE * 0.8))
-except:
-    font_head = ImageFont.load_default()
-    font_date = ImageFont.load_default()
-    font_source = ImageFont.load_default()
-    font_sub_head = ImageFont.load_default()
+HEADLINE_FONT_FILES = [
+    "arialbd.ttf",
+    "ARIALNB.TTF",
+    "impact.ttf",
+    "bahnschrift.ttf",
+    "calibrib.ttf",
+    "cambriab.ttf",
+    "Candarab.ttf",
+    "corbelb.ttf",
+    "georgiab.ttf",
+    "segoeuib.ttf",
+    "tahomabd.ttf",
+    "timesbd.ttf",
+    "trebucbd.ttf",
+    "verdanab.ttf",
+    "SourceSansPro-Bold.otf",
+    "SourceSansPro-Semibold.otf",
+    "malgunbd.ttf",
+    "msjhbd.ttc",
+    "msyhbd.ttc",
+    "comicbd.ttf",
+]
+
+
+def load_font(font_file, size):
+    font_path = os.path.join("C:/Windows/Fonts", font_file)
+    try:
+        return ImageFont.truetype(font_path, size)
+    except Exception:
+        try:
+            return ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", size)
+        except Exception:
+            return ImageFont.load_default()
+
+
+headline_font_pairs = [
+    (load_font(font_file, FONT_SIZE_HEADLINE), load_font(font_file, int(FONT_SIZE_HEADLINE * 0.8)))
+    for font_file in HEADLINE_FONT_FILES
+]
+
+
+def headline_fonts_for_index(index):
+    return headline_font_pairs[index % len(headline_font_pairs)]
+
+
+font_head, font_sub_head = headline_fonts_for_index(0)
+font_date = load_font("arial.ttf", FONT_SIZE_DATE)
+font_source = load_font("arial.ttf", FONT_SIZE_SOURCE)
+
+
+def open_missing_logo_searches(missing_sources):
+    for source in sorted(missing_sources):
+        query = quote_plus(f"{source} logo")
+        webbrowser.open_new_tab(f"https://www.google.com/search?tbm=isch&q={query}")
 
 # ---------------- Process Word ----------------
 doc = Document(file_path)
 missing_sources = set()
+headline_index = 0
 
 for table in doc.tables:
     for row in table.rows:
@@ -317,6 +429,8 @@ for table in doc.tables:
 
             if not headline:
                 continue
+            font_head, font_sub_head = headline_fonts_for_index(headline_index)
+            headline_index += 1
 
             # filename
             words = headline.split()[:MAX_FILENAME_WORDS]
@@ -392,6 +506,7 @@ with open(MISSING_LOG_FILE, "w", encoding="utf-8") as f:
         f.write(s + "\n")
 if missing_sources:
     print(f"Missing logos saved to: {MISSING_LOG_FILE}")
+    open_missing_logo_searches(missing_sources)
 
 print("Render is done.")
 try:

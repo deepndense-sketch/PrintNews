@@ -1,6 +1,6 @@
 ﻿{
     "download_url":  "https://github.com/deepndense-sketch/PrintNews/raw/main/news_screenshot.exe",
     "channel":  "main",
-    "version":  "1.0.2",
-    "notes":  "Release 1.0.2 renames NewsLogos files to clean base names without .com, .net, .org, and other domain suffixes, while preserving duplicate logos like peta-au."
+    "version":  "1.0.3",
+    "notes":  "Release 1.0.3 adds 20 rotating bold headline fonts, opens Google Images searches for missing logos after render, and adds a GitHub logo sync prompt that downloads only missing logo filenames without replacing existing files."
 }
