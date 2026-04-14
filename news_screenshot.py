@@ -2,6 +2,7 @@
 import re
 import sys
 import json
+import subprocess
 import threading
 import webbrowser
 from urllib.parse import quote_plus, urlparse
@@ -28,7 +29,7 @@ os.makedirs(NOTE_FOLDER, exist_ok=True)
 MISSING_LOG_FILE = os.path.join(NOTE_FOLDER, "missing_logos.txt")
 SETTINGS_FILE = os.path.join(NOTE_FOLDER, "settings.json")
 SUPPORTED_LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".jfif")
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.7"
 UPDATE_INFO_URL = "https://raw.githubusercontent.com/deepndense-sketch/PrintNews/main/version.json"
 GITHUB_LOGO_API_URL = "https://api.github.com/repos/deepndense-sketch/PrintNews/contents/NewsLogos?ref=main"
 
@@ -65,20 +66,29 @@ def is_newer_version(remote_version, current_version):
     return remote_parts > current_parts
 
 
+def fetch_update_info():
+    response = requests.get(UPDATE_INFO_URL, timeout=6)
+    response.raise_for_status()
+    info = json.loads(response.content.decode("utf-8-sig"))
+    latest_version = str(info.get("version", "")).strip()
+    return {
+        "version": latest_version,
+        "notes": str(info.get("notes", "")).strip(),
+        "download_url": str(info.get("download_url", "")).strip(),
+        "is_newer": bool(latest_version and is_newer_version(latest_version, APP_VERSION)),
+    }
+
+
 def check_for_updates(show_current=False):
     try:
-        response = requests.get(UPDATE_INFO_URL, timeout=4)
-        response.raise_for_status()
-        info = json.loads(response.content.decode("utf-8-sig"))
-        latest_version = str(info.get("version", "")).strip()
-        if latest_version and is_newer_version(latest_version, APP_VERSION):
-            notes = str(info.get("notes", "")).strip()
-            download_url = str(info.get("download_url", "")).strip()
+        info = fetch_update_info()
+        latest_version = info["version"]
+        if info["is_newer"]:
             message = f"Update available to version {latest_version}.\n\nCurrent version: {APP_VERSION}\nLatest version: {latest_version}"
-            if notes:
-                message += f"\n\nWhat is updated:\n{notes}"
-            if download_url:
-                message += f"\n\nDownload/update link:\n{download_url}"
+            if info["notes"]:
+                message += f"\n\nWhat is updated:\n{info['notes']}"
+            if info["download_url"]:
+                message += f"\n\nDownload/update link:\n{info['download_url']}"
             messagebox.showinfo("Update Available", message)
         elif show_current:
             latest_label = latest_version or "unknown"
@@ -86,6 +96,69 @@ def check_for_updates(show_current=False):
     except Exception:
         if show_current:
             messagebox.showwarning("Update Check Failed", "Could not check for updates right now.")
+
+
+update_info = None
+
+
+def update_button_from_info(info=None, error=None):
+    global update_info
+    if error:
+        update_button.config(text="Update check failed")
+        return
+    update_info = info
+    latest_version = info.get("version") or APP_VERSION
+    if info.get("is_newer"):
+        update_button.config(text=f"Update to {latest_version}")
+    else:
+        update_button.config(text=f"Latest version {latest_version}")
+
+
+def run_update_button_check():
+    try:
+        info = fetch_update_info()
+        root.after(0, update_button_from_info, info, None)
+    except Exception as e:
+        root.after(0, update_button_from_info, None, e)
+
+
+def start_update_button_check():
+    update_button.config(text="Checking update...")
+    threading.Thread(target=run_update_button_check, daemon=True).start()
+
+
+def install_update(info):
+    download_url = info.get("download_url")
+    latest_version = info.get("version")
+    if not download_url:
+        root.after(0, messagebox.showwarning, "Update Failed", "The update file link is missing.")
+        return
+    if not getattr(sys, "frozen", False):
+        root.after(0, messagebox.showinfo, "Update Available", f"Update available to version {latest_version}.\n\nDownload link:\n{download_url}")
+        return
+
+    try:
+        root.after(0, update_button.config, {"text": f"Downloading {latest_version}..."})
+        response = requests.get(download_url, timeout=60)
+        response.raise_for_status()
+        exe_path = sys.executable
+        new_exe_path = exe_path + ".new"
+        updater_path = os.path.join(BASE_DIR, "apply_update.bat")
+        with open(new_exe_path, "wb") as f:
+            f.write(response.content)
+        bat = f"""@echo off
+timeout /t 2 /nobreak > nul
+move /y "{new_exe_path}" "{exe_path}" > nul
+start "" "{exe_path}"
+del "%~f0"
+"""
+        with open(updater_path, "w", encoding="ascii") as f:
+            f.write(bat)
+        subprocess.Popen(["cmd", "/c", updater_path], cwd=BASE_DIR)
+        os._exit(0)
+    except Exception as e:
+        root.after(0, update_button.config, {"text": f"Update to {latest_version}"})
+        root.after(0, messagebox.showwarning, "Update Failed", f"Could not update to version {latest_version}.\n\n{e}")
 
 
 def sync_logos_from_github():
@@ -149,7 +222,10 @@ def start_logo_sync():
 
 
 def check_updates_clicked():
-    check_for_updates(show_current=True)
+    if update_info and update_info.get("is_newer"):
+        threading.Thread(target=install_update, args=(update_info,), daemon=True).start()
+    else:
+        start_update_button_check()
 # ---------------- GUI ----------------
 file_path = None
 output_path = None
@@ -228,8 +304,10 @@ Entry(root, textvariable=output_var, width=58).place(x=120, y=62)
 Button(root, text="Browse", command=browse_output).place(x=520, y=58)
 
 Button(root, text="Sync Logos", width=18, command=start_logo_sync).place(x=120, y=112)
-Button(root, text="Check Update", width=18, command=check_updates_clicked).place(x=350, y=112)
+update_button = Button(root, text="Checking update...", width=22, command=check_updates_clicked)
+update_button.place(x=330, y=112)
 Button(root, text="Run", width=20, command=run_app).place(x=235, y=155)
+root.after(500, start_update_button_check)
 
 root.mainloop()
 

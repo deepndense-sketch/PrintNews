@@ -1,6 +1,6 @@
 {
     "download_url":  "https://github.com/deepndense-sketch/PrintNews/raw/main/news_screenshot.exe",
     "channel":  "main",
-    "version":  "1.0.6",
-    "notes":  "Release 1.0.6 fixes the Check Update button so it reads the latest GitHub version correctly and shows the latest version number."
+    "version":  "1.0.7",
+    "notes":  "Release 1.0.7 makes the update button check silently when the app opens, show either Update to the latest version or Latest version, and install the new exe when clicked."
 }
