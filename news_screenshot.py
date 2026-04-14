@@ -28,7 +28,7 @@ os.makedirs(NOTE_FOLDER, exist_ok=True)
 MISSING_LOG_FILE = os.path.join(NOTE_FOLDER, "missing_logos.txt")
 SETTINGS_FILE = os.path.join(NOTE_FOLDER, "settings.json")
 SUPPORTED_LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".jfif")
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 UPDATE_INFO_URL = "https://raw.githubusercontent.com/deepndense-sketch/PrintNews/main/version.json"
 GITHUB_LOGO_API_URL = "https://api.github.com/repos/deepndense-sketch/PrintNews/contents/NewsLogos?ref=main"
 
@@ -65,7 +65,7 @@ def is_newer_version(remote_version, current_version):
     return remote_parts > current_parts
 
 
-def check_for_updates():
+def check_for_updates(show_current=False):
     try:
         response = requests.get(UPDATE_INFO_URL, timeout=4)
         response.raise_for_status()
@@ -80,8 +80,11 @@ def check_for_updates():
             if download_url:
                 message += f"\n\nDownload/update link:\n{download_url}"
             messagebox.showinfo("Update Available", message)
+        elif show_current:
+            messagebox.showinfo("No Update", f"You are using the latest version: {APP_VERSION}")
     except Exception:
-        pass
+        if show_current:
+            messagebox.showwarning("Update Check Failed", "Could not check for updates right now.")
 
 
 def sync_logos_from_github():
@@ -140,12 +143,12 @@ def run_logo_sync_thread():
     root.after(0, show_logo_sync_result, downloaded, skipped, error)
 
 
-def ask_sync_logos():
-    if messagebox.askyesno(
-        "Sync Logos",
-        "Sync missing logos from GitHub?\n\nOnly logo files that are not already in your NewsLogos folder will be downloaded. Existing files will not be replaced.",
-    ):
-        threading.Thread(target=run_logo_sync_thread, daemon=True).start()
+def start_logo_sync():
+    threading.Thread(target=run_logo_sync_thread, daemon=True).start()
+
+
+def check_updates_clicked():
+    check_for_updates(show_current=True)
 # ---------------- GUI ----------------
 file_path = None
 output_path = None
@@ -209,10 +212,8 @@ settings = load_settings()
 
 root = Tk()
 root.title(f"News Image Generator v{APP_VERSION}")
-root.geometry("620x170")
+root.geometry("620x205")
 root.resizable(False, False)
-root.after(200, check_for_updates)
-root.after(700, ask_sync_logos)
 
 word_var = StringVar(value=settings.get("last_word_file", ""))
 output_var = StringVar(value=settings.get("last_output_folder", ""))
@@ -225,7 +226,9 @@ Label(root, text="Render Folder:").place(x=20, y=62)
 Entry(root, textvariable=output_var, width=58).place(x=120, y=62)
 Button(root, text="Browse", command=browse_output).place(x=520, y=58)
 
-Button(root, text="Run", width=20, command=run_app).place(x=235, y=112)
+Button(root, text="Sync Logos", width=18, command=start_logo_sync).place(x=120, y=112)
+Button(root, text="Check Update", width=18, command=check_updates_clicked).place(x=350, y=112)
+Button(root, text="Run", width=20, command=run_app).place(x=235, y=155)
 
 root.mainloop()
 

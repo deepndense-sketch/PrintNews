@@ -1,6 +1,6 @@
 ﻿{
     "download_url":  "https://github.com/deepndense-sketch/PrintNews/raw/main/news_screenshot.exe",
     "channel":  "main",
-    "version":  "1.0.3",
-    "notes":  "Release 1.0.3 adds 20 rotating bold headline fonts, opens Google Images searches for missing logos after render, and adds a GitHub logo sync prompt that downloads only missing logo filenames without replacing existing files."
+    "version":  "1.0.4",
+    "notes":  "Release 1.0.4 changes logo sync and update checks to manual buttons in the main window, so the app no longer asks to sync logos or checks for updates automatically when opened."
 }
