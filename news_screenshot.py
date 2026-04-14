@@ -28,7 +28,7 @@ os.makedirs(NOTE_FOLDER, exist_ok=True)
 MISSING_LOG_FILE = os.path.join(NOTE_FOLDER, "missing_logos.txt")
 SETTINGS_FILE = os.path.join(NOTE_FOLDER, "settings.json")
 SUPPORTED_LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".jfif")
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 UPDATE_INFO_URL = "https://raw.githubusercontent.com/deepndense-sketch/PrintNews/main/version.json"
 GITHUB_LOGO_API_URL = "https://api.github.com/repos/deepndense-sketch/PrintNews/contents/NewsLogos?ref=main"
 
@@ -69,7 +69,7 @@ def check_for_updates(show_current=False):
     try:
         response = requests.get(UPDATE_INFO_URL, timeout=4)
         response.raise_for_status()
-        info = response.json()
+        info = json.loads(response.content.decode("utf-8-sig"))
         latest_version = str(info.get("version", "")).strip()
         if latest_version and is_newer_version(latest_version, APP_VERSION):
             notes = str(info.get("notes", "")).strip()
