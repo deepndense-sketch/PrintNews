@@ -1,6 +1,6 @@
 {
     "download_url":  "https://github.com/deepndense-sketch/PrintNews/raw/main/news_screenshot.exe",
     "channel":  "main",
-    "version":  "1.0.7",
-    "notes":  "Release 1.0.7 makes the update button check silently when the app opens, show either Update to the latest version or Latest version, and install the new exe when clicked."
+    "version":  "1.0.8",
+    "notes":  "Release 1.0.8 searches missing logos with the full source domain, adds two-way logo sync with GitHub, and adds a one-time Set GitHub Token button for logo uploads."
 }

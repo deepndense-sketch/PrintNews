@@ -2,6 +2,7 @@
 dist/
 Note/settings.json
 Note/missing_logos.txt
+Note/Token for logo.txt
 Render/
 *.png
 !NewsLogos/*.png
