@@ -30,7 +30,7 @@ os.makedirs(NOTE_FOLDER, exist_ok=True)
 MISSING_LOG_FILE = os.path.join(NOTE_FOLDER, "missing_logos.txt")
 SETTINGS_FILE = os.path.join(NOTE_FOLDER, "settings.json")
 SUPPORTED_LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".jfif")
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 UPDATE_INFO_URL = "https://raw.githubusercontent.com/deepndense-sketch/PrintNews/main/version.json"
 GITHUB_REPO_OWNER = "deepndense-sketch"
 GITHUB_REPO_NAME = "PrintNews"
@@ -249,17 +249,30 @@ def sync_logos_with_github():
             downloaded.append(filename)
 
         upload_skipped = 0
-        upload_error = None
+        upload_errors = []
         if token:
             for filename in local_files:
                 if filename.lower() in remote_names:
                     upload_skipped += 1
                     continue
-                upload_logo_to_github(filename, token)
-                remote_names.add(filename.lower())
-                uploaded.append(filename)
+                try:
+                    upload_logo_to_github(filename, token)
+                    remote_names.add(filename.lower())
+                    uploaded.append(filename)
+                except requests.HTTPError as e:
+                    response = getattr(e, "response", None)
+                    status_code = response.status_code if response is not None else "unknown"
+                    upload_errors.append(f"{filename}: GitHub returned {status_code}")
+                except Exception as e:
+                    upload_errors.append(f"{filename}: {e}")
         else:
-            upload_error = "Click Set GitHub Token once on this computer to upload local logos to GitHub."
+            upload_errors.append("Click Set GitHub Token once on this computer to upload local logos to GitHub.")
+
+        upload_error = None
+        if upload_errors:
+            upload_error = "\n".join(upload_errors[:10])
+            if len(upload_errors) > 10:
+                upload_error += f"\n...and {len(upload_errors) - 10} more"
 
         return downloaded, uploaded, skipped, upload_skipped, upload_error, None
     except Exception as e:

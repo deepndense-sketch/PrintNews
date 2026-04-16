@@ -1,6 +1,6 @@
 {
     "download_url":  "https://github.com/deepndense-sketch/PrintNews/raw/main/news_screenshot.exe",
     "channel":  "main",
-    "version":  "1.0.8",
-    "notes":  "Release 1.0.8 searches missing logos with the full source domain, adds two-way logo sync with GitHub, and adds a one-time Set GitHub Token button for logo uploads."
+    "version":  "1.0.9",
+    "notes":  "Release 1.0.9 keeps logo download sync working even when GitHub refuses logo uploads, and reports upload permission errors more clearly."
 }
