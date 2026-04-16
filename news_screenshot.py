@@ -2,10 +2,11 @@
 import re
 import sys
 import json
+import base64
 import subprocess
 import threading
 import webbrowser
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote, quote_plus, urlparse
 from tkinter import Tk, Label, Entry, Button, filedialog, StringVar, messagebox
 from PIL import Image, ImageDraw, ImageFont
 from docx import Document
@@ -31,7 +32,11 @@ SETTINGS_FILE = os.path.join(NOTE_FOLDER, "settings.json")
 SUPPORTED_LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".jfif")
 APP_VERSION = "1.0.7"
 UPDATE_INFO_URL = "https://raw.githubusercontent.com/deepndense-sketch/PrintNews/main/version.json"
-GITHUB_LOGO_API_URL = "https://api.github.com/repos/deepndense-sketch/PrintNews/contents/NewsLogos?ref=main"
+GITHUB_REPO_OWNER = "deepndense-sketch"
+GITHUB_REPO_NAME = "PrintNews"
+GITHUB_BRANCH = "main"
+GITHUB_LOGO_API_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents/NewsLogos?ref={GITHUB_BRANCH}"
+GITHUB_CONTENTS_API_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents"
 
 # ---------------- Config ----------------
 PADDING_TOP = 20
@@ -161,14 +166,61 @@ del "%~f0"
         root.after(0, messagebox.showwarning, "Update Failed", f"Could not update to version {latest_version}.\n\n{e}")
 
 
-def sync_logos_from_github():
+def get_github_token():
+    return (
+        os.environ.get("PRINTNEWS_GITHUB_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("GH_TOKEN")
+    )
+
+
+def github_headers(token=None):
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "PrintNews",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def upload_logo_to_github(filename, token):
+    path_for_api = quote(f"NewsLogos/{filename}", safe="/")
+    api_url = f"{GITHUB_CONTENTS_API_URL}/{path_for_api}"
+    local_path = os.path.join(LOGO_FOLDER, filename)
+    with open(local_path, "rb") as f:
+        encoded_content = base64.b64encode(f.read()).decode("ascii")
+
+    payload = {
+        "message": f"Add logo {filename}",
+        "content": encoded_content,
+        "branch": GITHUB_BRANCH,
+    }
+    response = requests.put(api_url, headers=github_headers(token), json=payload, timeout=20)
+    response.raise_for_status()
+
+
+def sync_logos_with_github():
     try:
         os.makedirs(LOGO_FOLDER, exist_ok=True)
-        existing = {name.lower() for name in os.listdir(LOGO_FOLDER)}
-        response = requests.get(GITHUB_LOGO_API_URL, headers={"User-Agent": "PrintNews"}, timeout=10)
+        token = get_github_token()
+        local_files = [
+            name for name in os.listdir(LOGO_FOLDER)
+            if name.lower().endswith(SUPPORTED_LOGO_EXTENSIONS)
+            and os.path.isfile(os.path.join(LOGO_FOLDER, name))
+        ]
+        existing = {name.lower() for name in local_files}
+        response = requests.get(GITHUB_LOGO_API_URL, headers=github_headers(token), timeout=10)
         response.raise_for_status()
         remote_files = response.json()
+        remote_names = {
+            item.get("name", "").lower()
+            for item in remote_files
+            if item.get("name", "").lower().endswith(SUPPORTED_LOGO_EXTENSIONS)
+        }
         downloaded = []
+        uploaded = []
         skipped = 0
 
         for item in remote_files:
@@ -194,27 +246,52 @@ def sync_logos_from_github():
             existing.add(filename.lower())
             downloaded.append(filename)
 
-        return downloaded, skipped, None
+        upload_skipped = 0
+        upload_error = None
+        if token:
+            for filename in local_files:
+                if filename.lower() in remote_names:
+                    upload_skipped += 1
+                    continue
+                upload_logo_to_github(filename, token)
+                remote_names.add(filename.lower())
+                uploaded.append(filename)
+        else:
+            upload_error = "Set PRINTNEWS_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN on this computer to upload local logos to GitHub."
+
+        return downloaded, uploaded, skipped, upload_skipped, upload_error, None
     except Exception as e:
-        return [], 0, e
+        return [], [], 0, 0, None, e
 
 
-def show_logo_sync_result(downloaded, skipped, error):
+def show_logo_sync_result(downloaded, uploaded, skipped, upload_skipped, upload_error, error):
     if error:
         messagebox.showwarning("Logo Sync Failed", f"Could not sync logos from GitHub.\n\n{error}")
         return
 
-    message = f"Logo sync complete.\n\nDownloaded: {len(downloaded)}\nAlready had: {skipped}"
+    message = (
+        "Logo sync complete.\n\n"
+        f"Downloaded from GitHub: {len(downloaded)}\n"
+        f"Uploaded to GitHub: {len(uploaded)}\n"
+        f"Already had locally: {skipped}\n"
+        f"Already on GitHub: {upload_skipped}"
+    )
     if downloaded:
-        message += "\n\nNew logos:\n" + "\n".join(downloaded[:30])
+        message += "\n\nDownloaded logos:\n" + "\n".join(downloaded[:30])
         if len(downloaded) > 30:
             message += f"\n...and {len(downloaded) - 30} more"
+    if uploaded:
+        message += "\n\nUploaded logos:\n" + "\n".join(uploaded[:30])
+        if len(uploaded) > 30:
+            message += f"\n...and {len(uploaded) - 30} more"
+    if upload_error:
+        message += f"\n\nUpload skipped:\n{upload_error}"
     messagebox.showinfo("Logo Sync", message)
 
 
 def run_logo_sync_thread():
-    downloaded, skipped, error = sync_logos_from_github()
-    root.after(0, show_logo_sync_result, downloaded, skipped, error)
+    downloaded, uploaded, skipped, upload_skipped, upload_error, error = sync_logos_with_github()
+    root.after(0, show_logo_sync_result, downloaded, uploaded, skipped, upload_skipped, upload_error, error)
 
 
 def start_logo_sync():
@@ -381,6 +458,10 @@ def missing_logo_name(source):
     return base_logo_name(source)
 
 
+def missing_logo_search_name(source):
+    return (source or "Unknown").strip()
+
+
 def find_logo_path(name):
     if not os.path.isdir(LOGO_FOLDER):
         return None
@@ -491,14 +572,15 @@ font_date = load_font("arial.ttf", FONT_SIZE_DATE)
 font_source = load_font("arial.ttf", FONT_SIZE_SOURCE)
 
 
-def open_missing_logo_searches(missing_sources):
-    for source in sorted(missing_sources):
+def open_missing_logo_searches(missing_search_sources):
+    for source in sorted(missing_search_sources):
         query = quote_plus(f"{source} logo")
         webbrowser.open_new_tab(f"https://www.google.com/search?tbm=isch&q={query}")
 
 # ---------------- Process Word ----------------
 doc = Document(file_path)
 missing_sources = set()
+missing_search_sources = set()
 headline_index = 0
 
 for table in doc.tables:
@@ -527,6 +609,7 @@ for table in doc.tables:
             logo, used_fallback = get_logo(source, url)
             if used_fallback:
                 missing_sources.add(missing_logo_name(source))
+                missing_search_sources.add(missing_logo_search_name(source))
 
             save_path = os.path.join(OUTPUT_FOLDER, f"{name}.png")
             date = normalize_date(date_raw)
@@ -588,7 +671,7 @@ with open(MISSING_LOG_FILE, "w", encoding="utf-8") as f:
         f.write(s + "\n")
 if missing_sources:
     print(f"Missing logos saved to: {MISSING_LOG_FILE}")
-    open_missing_logo_searches(missing_sources)
+    open_missing_logo_searches(missing_search_sources)
 
 print("Render is done.")
 try:
