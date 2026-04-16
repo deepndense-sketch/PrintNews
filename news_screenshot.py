@@ -7,7 +7,7 @@ import subprocess
 import threading
 import webbrowser
 from urllib.parse import quote, quote_plus, urlparse
-from tkinter import Tk, Label, Entry, Button, filedialog, StringVar, messagebox
+from tkinter import Tk, Label, Entry, Button, filedialog, StringVar, messagebox, simpledialog
 from PIL import Image, ImageDraw, ImageFont
 from docx import Document
 import requests
@@ -37,6 +37,7 @@ GITHUB_REPO_NAME = "PrintNews"
 GITHUB_BRANCH = "main"
 GITHUB_LOGO_API_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents/NewsLogos?ref={GITHUB_BRANCH}"
 GITHUB_CONTENTS_API_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents"
+GITHUB_TOKEN_SETTINGS_KEY = "github_token"
 
 # ---------------- Config ----------------
 PADDING_TOP = 20
@@ -171,6 +172,7 @@ def get_github_token():
         os.environ.get("PRINTNEWS_GITHUB_TOKEN")
         or os.environ.get("GITHUB_TOKEN")
         or os.environ.get("GH_TOKEN")
+        or str(load_settings().get(GITHUB_TOKEN_SETTINGS_KEY, "")).strip()
     )
 
 
@@ -257,7 +259,7 @@ def sync_logos_with_github():
                 remote_names.add(filename.lower())
                 uploaded.append(filename)
         else:
-            upload_error = "Set PRINTNEWS_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN on this computer to upload local logos to GitHub."
+            upload_error = "Click Set GitHub Token once on this computer to upload local logos to GitHub."
 
         return downloaded, uploaded, skipped, upload_skipped, upload_error, None
     except Exception as e:
@@ -319,10 +321,44 @@ def load_settings():
 def save_settings(word_file, output_folder):
     try:
         os.makedirs(NOTE_FOLDER, exist_ok=True)
+        settings_data = load_settings()
+        settings_data["last_word_file"] = word_file
+        settings_data["last_output_folder"] = output_folder
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump({"last_word_file": word_file, "last_output_folder": output_folder}, f, indent=2)
+            json.dump(settings_data, f, indent=2)
     except Exception as e:
         print("Could not save settings:", e)
+
+
+def save_github_token(token):
+    try:
+        os.makedirs(NOTE_FOLDER, exist_ok=True)
+        settings_data = load_settings()
+        settings_data[GITHUB_TOKEN_SETTINGS_KEY] = token
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings_data, f, indent=2)
+        return True
+    except Exception as e:
+        messagebox.showwarning("Token Not Saved", f"Could not save GitHub token.\n\n{e}")
+        return False
+
+
+def set_github_token():
+    token = simpledialog.askstring(
+        "Set GitHub Token",
+        "Paste a GitHub token with Contents read/write permission for this repo.\n\n"
+        "It will be saved on this computer only.",
+        show="*",
+        parent=root,
+    )
+    if token is None:
+        return
+    token = token.strip()
+    if not token:
+        messagebox.showwarning("Missing Token", "No token was entered.")
+        return
+    if save_github_token(token):
+        messagebox.showinfo("GitHub Token Saved", "Done. Sync Logos can now upload from this computer.")
 
 
 def browse_word():
@@ -366,7 +402,7 @@ settings = load_settings()
 
 root = Tk()
 root.title(f"News Image Generator v{APP_VERSION}")
-root.geometry("620x205")
+root.geometry("620x245")
 root.resizable(False, False)
 
 word_var = StringVar(value=settings.get("last_word_file", ""))
@@ -383,7 +419,8 @@ Button(root, text="Browse", command=browse_output).place(x=520, y=58)
 Button(root, text="Sync Logos", width=18, command=start_logo_sync).place(x=120, y=112)
 update_button = Button(root, text="Checking update...", width=22, command=check_updates_clicked)
 update_button.place(x=330, y=112)
-Button(root, text="Run", width=20, command=run_app).place(x=235, y=155)
+Button(root, text="Set GitHub Token", width=18, command=set_github_token).place(x=120, y=155)
+Button(root, text="Run", width=20, command=run_app).place(x=235, y=195)
 root.after(500, start_update_button_check)
 
 root.mainloop()
