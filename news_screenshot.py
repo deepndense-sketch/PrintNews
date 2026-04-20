@@ -30,7 +30,7 @@ os.makedirs(NOTE_FOLDER, exist_ok=True)
 MISSING_LOG_FILE = os.path.join(NOTE_FOLDER, "missing_logos.txt")
 SETTINGS_FILE = os.path.join(NOTE_FOLDER, "settings.json")
 SUPPORTED_LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".jfif")
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.1.0"
 UPDATE_INFO_URL = "https://raw.githubusercontent.com/deepndense-sketch/PrintNews/main/version.json"
 GITHUB_REPO_OWNER = "deepndense-sketch"
 GITHUB_REPO_NAME = "PrintNews"
@@ -492,20 +492,33 @@ def base_logo_name(name):
     return cleaned.split(".", 1)[0] if "." in cleaned else cleaned
 
 
+def missing_logo_note_name(name):
+    cleaned = (name or "Unknown").strip()
+    parts = cleaned.split(".") if cleaned else []
+    return ".".join(parts[:-1]) if len(parts) > 1 else cleaned
+
+
+def preferred_logo_name(name):
+    cleaned = (name or "Unknown").strip()
+    preferred = missing_logo_note_name(cleaned)
+    return preferred or cleaned
+
+
 def logo_name_candidates(name):
     names = []
     cleaned = (name or "").strip()
     base_name = base_logo_name(cleaned)
+    note_name = missing_logo_note_name(cleaned)
     parts = cleaned.split(".") if cleaned else []
     country_name = base_name + "-" + parts[-1] if len(parts) > 2 else ""
-    for candidate in (cleaned, base_name, country_name, base_name + ".com"):
+    for candidate in (cleaned, note_name, base_name, country_name, base_name + ".com"):
         if candidate:
             names.append(candidate)
     return list(dict.fromkeys(names))
 
 
 def missing_logo_name(source):
-    return base_logo_name(source)
+    return missing_logo_note_name(source)
 
 
 def missing_logo_search_name(source):
@@ -516,6 +529,7 @@ def find_logo_path(name):
     if not os.path.isdir(LOGO_FOLDER):
         return None
 
+    preferred_name = preferred_logo_name(name)
     expected = {
         f"{candidate}{ext}".lower()
         for candidate in logo_name_candidates(name)
@@ -523,7 +537,19 @@ def find_logo_path(name):
     }
     for filename in os.listdir(LOGO_FOLDER):
         if filename.lower() in expected:
-            return os.path.join(LOGO_FOLDER, filename)
+            current_path = os.path.join(LOGO_FOLDER, filename)
+            current_base, current_ext = os.path.splitext(filename)
+            if preferred_name and current_base != preferred_name:
+                preferred_filename = f"{preferred_name}{current_ext}"
+                preferred_path = os.path.join(LOGO_FOLDER, preferred_filename)
+                if not os.path.exists(preferred_path):
+                    try:
+                        os.replace(current_path, preferred_path)
+                        print(f"Renamed logo: {filename} -> {preferred_filename}")
+                        return preferred_path
+                    except Exception:
+                        pass
+            return current_path
     return None
 
 
@@ -617,6 +643,14 @@ def headline_fonts_for_index(index):
     return headline_font_pairs[index % len(headline_font_pairs)]
 
 
+def headline_fonts_for_source(source, source_font_indices, next_index):
+    source_key = (source or "Unknown").strip().lower()
+    if source_key not in source_font_indices:
+        source_font_indices[source_key] = next_index
+        next_index += 1
+    return headline_fonts_for_index(source_font_indices[source_key]), next_index
+
+
 font_head, font_sub_head = headline_fonts_for_index(0)
 font_date = load_font("arial.ttf", FONT_SIZE_DATE)
 font_source = load_font("arial.ttf", FONT_SIZE_SOURCE)
@@ -632,6 +666,7 @@ doc = Document(file_path)
 missing_sources = set()
 missing_search_sources = set()
 headline_index = 0
+source_font_indices = {}
 
 for table in doc.tables:
     for row in table.rows:
@@ -640,11 +675,16 @@ for table in doc.tables:
             number = row.cells[1].text.strip()
             headline = row.cells[2].text.strip()
             url = row.cells[3].text.strip()
+            parsed = urlparse(url) if url else None
+            source = parsed.netloc.replace("www.", "") if parsed else "Unknown"
 
             if not headline:
                 continue
-            font_head, font_sub_head = headline_fonts_for_index(headline_index)
-            headline_index += 1
+            (font_head, font_sub_head), headline_index = headline_fonts_for_source(
+                source,
+                source_font_indices,
+                headline_index,
+            )
 
             # filename
             words = headline.split()[:MAX_FILENAME_WORDS]
@@ -652,9 +692,6 @@ for table in doc.tables:
             name = name_base
 
             # source
-            parsed = urlparse(url) if url else None
-            source = parsed.netloc.replace("www.", "") if parsed else "Unknown"
-
             # get logo
             logo, used_fallback = get_logo(source, url)
             if used_fallback:
@@ -728,6 +765,9 @@ try:
     messagebox.showinfo("Render Complete", "Render is done.")
 except Exception:
     pass
+
+
+
 
 
 
