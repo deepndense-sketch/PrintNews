@@ -1,0 +1,31 @@
+﻿PrintNews headline font list
+Version: 1.0.7
+
+The app rotates these 20 headline fonts, then starts again from font 1.
+Install/enable equivalent fonts on another Windows machine if any are missing.
+
+1. Arial Bold - arialbd.ttf
+2. Arial Narrow Bold - ARIALNB.TTF
+3. Impact - impact.ttf
+4. Bahnschrift - bahnschrift.ttf
+5. Calibri Bold - calibrib.ttf
+6. Cambria Bold - cambriab.ttf
+7. Candara Bold - Candarab.ttf
+8. Corbel Bold - corbelb.ttf
+9. Georgia Bold - georgiab.ttf
+10. Segoe UI Bold - segoeuib.ttf
+11. Tahoma Bold - tahomabd.ttf
+12. Times New Roman Bold - timesbd.ttf
+13. Trebuchet MS Bold - trebucbd.ttf
+14. Verdana Bold - verdanab.ttf
+15. Source Sans Pro Bold - SourceSansPro-Bold.otf
+16. Source Sans Pro Semibold - SourceSansPro-Semibold.otf
+17. Malgun Gothic Bold - malgunbd.ttf
+18. Microsoft JhengHei Bold - msjhbd.ttc
+19. Microsoft YaHei Bold - msyhbd.ttc
+20. Comic Sans MS Bold - comicbd.ttf
+
+Default font folder on Windows:
+C:\Windows\Fonts
+
+Note: Do not redistribute Windows font files unless your license allows it. This list is for checking/installing equivalent fonts on the other user's computer.

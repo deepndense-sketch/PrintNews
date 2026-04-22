@@ -1,4 +1,4 @@
-﻿import os
+import os
 import re
 import sys
 import json
@@ -6,16 +6,15 @@ import base64
 import subprocess
 import threading
 import webbrowser
+from datetime import datetime
 from urllib.parse import quote, quote_plus, urlparse
-from tkinter import Tk, Label, Entry, Button, filedialog, StringVar, messagebox, simpledialog
+from tkinter import Tk, Label, Entry, Button, filedialog, StringVar, messagebox, simpledialog, Toplevel, Text
+from tkinter import colorchooser
 from PIL import Image, ImageDraw, ImageFont
 from docx import Document
-import requests
-from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+from docx.shared import Pt
 from io import BytesIO
+import requests
 
 # ---------------- Paths for executable-friendly ----------------
 if getattr(sys, 'frozen', False):
@@ -38,6 +37,13 @@ GITHUB_BRANCH = "main"
 GITHUB_LOGO_API_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents/NewsLogos?ref={GITHUB_BRANCH}"
 GITHUB_CONTENTS_API_URL = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents"
 GITHUB_TOKEN_SETTINGS_KEY = "github_token"
+REQUEST_HEADERS = {"User-Agent": "PrintNews"}
+CROSS_CHECK_SETTINGS_KEY = "cross_check_news_with_link"
+HIGHLIGHT_COLOR_SETTINGS_KEY = "highlight_color"
+HIGHLIGHT_OPACITY_SETTINGS_KEY = "highlight_opacity"
+DEFAULT_HIGHLIGHT_COLOR = "#fff176"
+DEFAULT_HIGHLIGHT_OPACITY = 80
+EXPORT_PREFIX = "SourceListPR_"
 
 # ---------------- Config ----------------
 PADDING_TOP = 20
@@ -54,6 +60,14 @@ MIN_WIDTH = 800
 MAX_WIDTH = 1500
 SUB_HEAD_COLOR = "#003366"  # dark blue for sub headline
 GAP_BETWEEN_SEGMENTS = 20  # extra gap for // segments
+HIGHLIGHT_PADDING = 5
+
+MONTH_MAP = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+    "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
 
 
 def version_parts(version):
@@ -321,6 +335,10 @@ def check_updates_clicked():
 # ---------------- GUI ----------------
 file_path = None
 output_path = None
+highlight_bold_text = True
+highlight_color = DEFAULT_HIGHLIGHT_COLOR
+highlight_opacity = DEFAULT_HIGHLIGHT_OPACITY
+action_mode = ""
 
 
 def load_settings():
@@ -331,12 +349,14 @@ def load_settings():
         return {}
 
 
-def save_settings(word_file, output_folder):
+def save_settings(word_file, output_folder, bold_highlight_color, bold_highlight_opacity):
     try:
         os.makedirs(NOTE_FOLDER, exist_ok=True)
         settings_data = load_settings()
         settings_data["last_word_file"] = word_file
         settings_data["last_output_folder"] = output_folder
+        settings_data[HIGHLIGHT_COLOR_SETTINGS_KEY] = (bold_highlight_color or DEFAULT_HIGHLIGHT_COLOR).strip()
+        settings_data[HIGHLIGHT_OPACITY_SETTINGS_KEY] = int(bold_highlight_opacity)
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(settings_data, f, indent=2)
     except Exception as e:
@@ -374,6 +394,122 @@ def set_github_token():
         messagebox.showinfo("GitHub Token Saved", "Done. Sync Logos can now upload from this computer.")
 
 
+def save_render_settings():
+    try:
+        os.makedirs(NOTE_FOLDER, exist_ok=True)
+        settings_data = load_settings()
+        settings_data[HIGHLIGHT_COLOR_SETTINGS_KEY] = highlight_color_var.get().strip() or DEFAULT_HIGHLIGHT_COLOR
+        try:
+            settings_data[HIGHLIGHT_OPACITY_SETTINGS_KEY] = int(highlight_opacity_var.get().strip() or DEFAULT_HIGHLIGHT_OPACITY)
+        except ValueError:
+            settings_data[HIGHLIGHT_OPACITY_SETTINGS_KEY] = DEFAULT_HIGHLIGHT_OPACITY
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings_data, f, indent=2)
+    except Exception as e:
+        messagebox.showwarning("Settings Not Saved", f"Could not save render settings.\n\n{e}")
+
+
+def attach_tooltip(widget, text):
+    tooltip = {"window": None}
+
+    def show_tooltip(_event=None):
+        if tooltip["window"] or not text:
+            return
+        x = widget.winfo_rootx() + 10
+        y = widget.winfo_rooty() + widget.winfo_height() + 4
+        win = Toplevel(widget)
+        win.wm_overrideredirect(True)
+        win.wm_geometry(f"+{x}+{y}")
+        Label(win, text=text, bg="#fffbe6", fg="#333333", relief="solid", bd=1, padx=8, pady=4, wraplength=500, justify="left").pack()
+        tooltip["window"] = win
+
+    def hide_tooltip(_event=None):
+        if tooltip["window"] is not None:
+            tooltip["window"].destroy()
+            tooltip["window"] = None
+
+    widget.bind("<Enter>", show_tooltip)
+    widget.bind("<Leave>", hide_tooltip)
+
+
+def choose_highlight_color():
+    selected = colorchooser.askcolor(color=highlight_color_var.get().strip() or DEFAULT_HIGHLIGHT_COLOR, parent=root)
+    if selected and selected[1]:
+        highlight_color_var.set(selected[1])
+        save_render_settings()
+
+
+def source_display_name(source):
+    cleaned = (source or "Unknown").strip()
+    cleaned = cleaned.replace("www.", "")
+    cleaned = cleaned.split(".", 1)[0]
+    cleaned = re.sub(r"[^A-Za-z0-9&' -]", "", cleaned).strip()
+    if not cleaned:
+        cleaned = "Unknown"
+    return cleaned[:1].upper() + cleaned[1:].lower()
+
+
+def next_source_list_path(base_dir):
+    index = 1
+    while True:
+        path = os.path.join(base_dir, f"{EXPORT_PREFIX}{index}.docx")
+        if not os.path.exists(path):
+            return path
+        index += 1
+
+
+def export_priority_source_list():
+    export_file = word_var.get().strip()
+    if not export_file:
+        messagebox.showwarning("Missing Word File", "Please select a Word file first.")
+        return
+    try:
+        export_doc = Document(export_file)
+    except Exception as e:
+        messagebox.showwarning("Open Failed", f"Could not open the selected Word file.\n\n{e}")
+        return
+
+    output_doc = Document()
+    normal_style = output_doc.styles["Normal"]
+    normal_style.font.name = "Times New Roman"
+    normal_style.font.size = Pt(22)
+
+    entries = []
+    for table in export_doc.tables:
+        for row in table.rows:
+            if len(row.cells) < 4:
+                continue
+            number = row.cells[1].text.strip()
+            title = row.cells[2].text.strip()
+            url = row.cells[3].text.strip()
+            if not title:
+                continue
+            parsed = urlparse(url) if url else None
+            source = parsed.netloc.replace("www.", "") if parsed else "Unknown"
+            entries.append((number, title, source_display_name(source)))
+
+    if not entries:
+        messagebox.showinfo("No News Found", "No valid news rows were found in the selected file.")
+        return
+
+    export_path = next_source_list_path(os.path.dirname(export_file))
+    for number, title, source_name in entries:
+        paragraph = output_doc.add_paragraph()
+        run_number = paragraph.add_run(f"#{number}")
+        run_number.bold = True
+        run_number.font.name = "Times New Roman"
+        run_number.font.size = Pt(22)
+        run_middle = paragraph.add_run(f"   {title} ")
+        run_middle.font.name = "Times New Roman"
+        run_middle.font.size = Pt(22)
+        run_source = paragraph.add_run(f"({source_name})")
+        run_source.bold = True
+        run_source.font.name = "Times New Roman"
+        run_source.font.size = Pt(22)
+    output_doc.save(export_path)
+    messagebox.showinfo("Export Complete", f"Source list exported to:\n{export_path}")
+
+
 def browse_word():
     initial_file = word_var.get().strip()
     initial_dir = os.path.dirname(initial_file) if initial_file else BASE_DIR
@@ -395,45 +531,81 @@ def browse_output():
         output_var.set(path)
 
 
-def run_app():
-    global file_path, output_path
+def prepare_common_state():
+    global file_path, output_path, highlight_bold_text, highlight_color, highlight_opacity
     file_path = word_var.get().strip()
     output_path = output_var.get().strip()
+    highlight_bold_text = True
+    highlight_color = highlight_color_var.get().strip() or DEFAULT_HIGHLIGHT_COLOR
+    try:
+        highlight_opacity = max(0, min(100, int(highlight_opacity_var.get().strip() or DEFAULT_HIGHLIGHT_OPACITY)))
+    except ValueError:
+        messagebox.showwarning("Invalid Opacity", "Highlight opacity must be a number from 0 to 100.")
+        return False
     if not file_path:
         messagebox.showwarning("Missing Word File", "Please select a Word file.")
-        return
+        return False
     if not output_path:
         output_path = os.path.dirname(file_path)
         output_var.set(output_path)
     if not os.path.isdir(output_path):
         messagebox.showwarning("Missing Render Folder", "Please choose a render folder for the PNG files.")
+        return False
+    save_settings(file_path, output_path, highlight_color, highlight_opacity)
+    return True
+
+
+def run_app():
+    global action_mode
+    if not prepare_common_state():
         return
-    save_settings(file_path, output_path)
+    action_mode = "render"
+    root.quit()
+
+
+def run_check_only():
+    global action_mode
+    if not prepare_common_state():
+        return
+    action_mode = "check"
     root.quit()
 
 settings = load_settings()
 
 root = Tk()
 root.title(f"News Image Generator v{APP_VERSION}")
-root.geometry("620x245")
+root.geometry("760x380")
 root.resizable(False, False)
 
 word_var = StringVar(value=settings.get("last_word_file", ""))
 output_var = StringVar(value=settings.get("last_output_folder", ""))
+highlight_color_var = StringVar(value=settings.get(HIGHLIGHT_COLOR_SETTINGS_KEY, DEFAULT_HIGHLIGHT_COLOR))
+highlight_opacity_var = StringVar(value=str(settings.get(HIGHLIGHT_OPACITY_SETTINGS_KEY, DEFAULT_HIGHLIGHT_OPACITY)))
 
-Label(root, text="Word File:").place(x=20, y=20)
-Entry(root, textvariable=word_var, width=58).place(x=120, y=20)
-Button(root, text="Browse", command=browse_word).place(x=520, y=16)
-
-Label(root, text="Render Folder:").place(x=20, y=62)
-Entry(root, textvariable=output_var, width=58).place(x=120, y=62)
-Button(root, text="Browse", command=browse_output).place(x=520, y=58)
-
-Button(root, text="Sync Logos", width=18, command=start_logo_sync).place(x=120, y=112)
+Label(root, text="PrintNews", font=("Georgia", 18, "bold")).place(x=24, y=18)
+Button(root, text="Sync Logos", width=14, command=start_logo_sync).place(x=220, y=18)
+Button(root, text="Set GitHub Token", width=16, command=set_github_token).place(x=350, y=18)
 update_button = Button(root, text="Checking update...", width=22, command=check_updates_clicked)
-update_button.place(x=330, y=112)
-Button(root, text="Set GitHub Token", width=18, command=set_github_token).place(x=120, y=155)
-Button(root, text="Run", width=20, command=run_app).place(x=235, y=195)
+update_button.place(x=500, y=18)
+
+Label(root, text="Word File", font=("Georgia", 10, "bold")).place(x=24, y=84)
+Entry(root, textvariable=word_var, width=58, relief="solid", bd=1).place(x=24, y=108)
+Button(root, text="Browse", command=browse_word).place(x=465, y=104)
+
+Label(root, text="Render Folder", font=("Georgia", 10, "bold")).place(x=24, y=148)
+Entry(root, textvariable=output_var, width=58, relief="solid", bd=1).place(x=24, y=172)
+Button(root, text="Browse", command=browse_output).place(x=465, y=168)
+
+Label(root, text="Note: Bold your headline text to apply hilight after checking.", font=("Georgia", 10, "bold")).place(x=24, y=228)
+Label(root, text="Highlight Color").place(x=24, y=264)
+Entry(root, textvariable=highlight_color_var, width=14, relief="solid", bd=1).place(x=120, y=264)
+Button(root, text="Choose", command=choose_highlight_color).place(x=238, y=260)
+Label(root, text="Opacity %").place(x=330, y=264)
+Entry(root, textvariable=highlight_opacity_var, width=8, relief="solid", bd=1).place(x=400, y=264)
+
+Button(root, text="Check News Against Link", width=22, command=run_check_only).place(x=70, y=325)
+Button(root, text="Export Priority Source List", width=24, command=export_priority_source_list).place(x=278, y=325)
+Button(root, text="Render News", width=22, command=run_app).place(x=520, y=325)
 root.after(500, start_update_button_check)
 
 root.mainloop()
@@ -486,6 +658,96 @@ def normalize_date(d):
     if re.fullmatch(r'\d{8}', d):
         return f"{d[:4]}-{d[4:6]}-{d[6:]}"
     return d
+
+
+def normalize_text(value):
+    text = (value or "").strip()
+    replacements = {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u00a0": " ",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def normalize_title(value):
+    title = normalize_text(value).lower()
+    title = re.sub(r"\s+\|\s+[^|]+$", "", title)
+    title = re.sub(r"\s+-\s+[^-]+$", "", title)
+    title = re.sub(r"[^\w\s]", "", title)
+    return re.sub(r"\s+", " ", title).strip()
+
+
+def parse_date_to_canonical(text):
+    raw = normalize_text(text)
+    if not raw:
+        return ""
+    raw = re.sub(r"\b(\d{1,2})(st|nd|rd|th)\b", r"\1", raw, flags=re.IGNORECASE)
+    compact = re.fullmatch(r"(\d{4})(\d{2})(\d{2})", raw)
+    if compact:
+        return f"{compact.group(1)}-{compact.group(2)}-{compact.group(3)}"
+    iso = re.search(r"(\d{4})-(\d{2})-(\d{2})", raw)
+    if iso:
+        return f"{iso.group(1)}-{iso.group(2)}-{iso.group(3)}"
+    slash = re.search(r"\b(\d{1,4})[/-](\d{1,2})[/-](\d{1,4})\b", raw)
+    if slash:
+        a, b, c = int(slash.group(1)), int(slash.group(2)), int(slash.group(3))
+        candidates = [(a, b, c)] if a > 999 else []
+        if c > 999:
+            candidates += [(c, a, b), (c, b, a)]
+        for year, month, day in candidates:
+            try:
+                return datetime(year, month, day).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+    spelled = re.search(r"\b([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})\b", raw)
+    if spelled:
+        month = MONTH_MAP.get(spelled.group(1).lower())
+        if month:
+            try:
+                return datetime(int(spelled.group(3)), month, int(spelled.group(2))).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+    spoken = re.search(r"\b(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\b", raw)
+    if spoken:
+        month = MONTH_MAP.get(spoken.group(2).lower())
+        if month:
+            try:
+                return datetime(int(spoken.group(3)), month, int(spoken.group(1))).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+    return ""
+
+
+def format_date_like_sheet(canonical_date, sheet_date_raw):
+    if not canonical_date:
+        return ""
+    try:
+        dt = datetime.strptime(canonical_date, "%Y-%m-%d")
+    except ValueError:
+        return canonical_date
+    sheet_raw = (sheet_date_raw or "").strip()
+    if re.fullmatch(r"\d{8}", sheet_raw):
+        return dt.strftime("%Y%m%d")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", sheet_raw):
+        return dt.strftime("%Y-%m-%d")
+    if re.fullmatch(r"\d{4}/\d{2}/\d{2}", sheet_raw):
+        return dt.strftime("%Y/%m/%d")
+    return canonical_date
+
+
+def title_exact_match(sheet_title, web_title):
+    return bool(normalize_title(sheet_title) and normalize_title(sheet_title) == normalize_title(web_title))
+
+
+def date_exact_match(sheet_date, web_date):
+    return bool(parse_date_to_canonical(sheet_date) and parse_date_to_canonical(sheet_date) == parse_date_to_canonical(web_date))
 
 def base_logo_name(name):
     cleaned = (name or "Unknown").strip()
@@ -563,33 +825,6 @@ def get_logo(source, url=None):
     if path:
         return open_logo(path), False
 
-    if url:
-        try:
-            options = webdriver.ChromeOptions()
-            options.add_argument("--headless=new")
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-            driver.get(url)
-            driver.implicitly_wait(2)
-            soup = BeautifulSoup(driver.page_source, "html.parser")
-            for selector in ["logo", "site-logo", "header-logo"]:
-                img_tag = soup.find("img", {"class": selector})
-                if img_tag and img_tag.get("src"):
-                    src = img_tag["src"]
-                    if src.startswith("//"):
-                        src = "https:" + src
-                    elif src.startswith("/"):
-                        parsed = urlparse(url)
-                        src = f"{parsed.scheme}://{parsed.netloc}{src}"
-                    resp = requests.get(src, timeout=5)
-                    logo_img = Image.open(BytesIO(resp.content)).convert("RGBA")
-                    logo_img.thumbnail((LOGO_HEIGHT*5, LOGO_HEIGHT*5))
-                    driver.quit()
-                    return resize_logo(logo_img), False
-            driver.quit()
-        except:
-            try: driver.quit()
-            except: pass
-
     custom_path = find_logo_path(CUSTOM_LOGO_NAME)
     if custom_path:
         return open_logo(custom_path), True
@@ -661,96 +896,319 @@ def open_missing_logo_searches(missing_search_sources):
         query = quote_plus(f"{source} logo")
         webbrowser.open_new_tab(f"https://www.google.com/search?tbm=isch&q={query}")
 
-# ---------------- Process Word ----------------
+
+def build_highlight_fill(color_hex, opacity_percent):
+    color_hex = (color_hex or DEFAULT_HIGHLIGHT_COLOR).strip()
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color_hex):
+        color_hex = DEFAULT_HIGHLIGHT_COLOR
+    opacity = max(0, min(100, int(opacity_percent)))
+    alpha = int(255 * (opacity / 100.0))
+    return tuple(int(color_hex[i:i + 2], 16) for i in (1, 3, 5)) + (alpha,)
+
+
+def extract_row_runs(cell):
+    runs = []
+    for paragraph_index, paragraph in enumerate(cell.paragraphs):
+        if paragraph_index > 0:
+            runs.append({"text": "\n", "bold": False})
+        for run in paragraph.runs:
+            if run.text:
+                runs.append({"text": run.text, "bold": bool(run.bold)})
+    if not runs:
+        text = cell.text.strip()
+        if text:
+            runs.append({"text": text, "bold": False})
+    return runs
+
+
+def flatten_segments(segments):
+    flat = []
+    for segment in segments:
+        pieces = segment["text"].split("\n")
+        for index, piece in enumerate(pieces):
+            if piece:
+                flat.append({"text": piece, "bold": segment["bold"]})
+            if index < len(pieces) - 1:
+                flat.append({"text": "\n", "bold": False})
+    return flat
+
+
+def build_headline_segments(cell):
+    runs = extract_row_runs(cell)
+    if not runs:
+        return [{"text": "", "bold": False, "font": font_head, "color": "black"}]
+
+    full_text = "".join(run["text"] for run in runs)
+    parts = full_text.split("//")
+    segments = []
+    cursor = 0
+    for part_index, part in enumerate(parts):
+        part_len = len(part)
+        bucket = []
+        remaining = part_len
+        while remaining > 0 and cursor < len(runs):
+            current = runs[cursor]
+            current_text = current["text"]
+            take = min(len(current_text), remaining)
+            bucket.append({"text": current_text[:take], "bold": current["bold"]})
+            if take == len(current_text):
+                cursor += 1
+            else:
+                runs[cursor] = {"text": current_text[take:], "bold": current["bold"]}
+            remaining -= take
+        if bucket:
+            font = font_head if part_index == 0 else font_sub_head
+            color = "black" if part_index == 0 else SUB_HEAD_COLOR
+            for entry in flatten_segments(bucket):
+                entry["font"] = font
+                entry["color"] = color
+                segments.append(entry)
+        if part_index < len(parts) - 1:
+            if cursor < len(runs) and runs[cursor]["text"].startswith("//"):
+                if runs[cursor]["text"] == "//":
+                    cursor += 1
+                else:
+                    runs[cursor] = {"text": runs[cursor]["text"][2:], "bold": runs[cursor]["bold"]}
+            segments.append({"text": "\n", "bold": False, "font": font_sub_head, "color": SUB_HEAD_COLOR, "segment_break": True})
+    return segments or [{"text": cell.text.strip(), "bold": False, "font": font_head, "color": "black"}]
+
+
+def wrap_styled_segments(segments, max_width):
+    lines = []
+    current_line = []
+    current_width = 0
+    pending_gap = False
+
+    def flush_line():
+        nonlocal current_line, current_width, pending_gap
+        if current_line:
+            lines.append({"parts": current_line, "segment_gap_before": pending_gap})
+            current_line = []
+            current_width = 0
+            pending_gap = False
+
+    for segment in segments:
+        if segment.get("segment_break"):
+            flush_line()
+            pending_gap = True
+            continue
+        if segment["text"] == "\n":
+            flush_line()
+            continue
+        pieces = re.findall(r"\S+\s*|\s+", segment["text"])
+        for piece in pieces:
+            piece_width = text_width(segment["font"], piece)
+            if current_line and current_width + piece_width + 2 * MARGIN > max_width and piece.strip():
+                flush_line()
+            current_line.append({
+                "text": piece,
+                "font": segment["font"],
+                "color": segment["color"],
+                "bold": segment["bold"],
+            })
+            current_width += piece_width
+    flush_line()
+    return lines or [{"parts": [{"text": "", "font": font_head, "color": "black", "bold": False}], "segment_gap_before": False}]
+
+
+def replace_cell_text(cell, new_text):
+    cell.text = new_text
+
+
+def strip_bold_from_cell(cell):
+    cell.text = cell.text
+
+
+def run_manual_cross_check(rows, document):
+    for index, item in enumerate(rows, start=1):
+        url = item["url"].strip()
+        if url:
+            try:
+                webbrowser.open_new_tab(url)
+            except Exception:
+                pass
+        dialog = Toplevel(root)
+        dialog.title(f"Cross Check News {index}")
+        dialog.geometry("860x390")
+        dialog.resizable(False, False)
+        date_var = StringVar(value=item["date_raw"])
+        accepted = {"value": False}
+        Label(dialog, text="Change your news headline and date below", font=("Arial", 16, "bold")).place(x=24, y=20)
+        Label(dialog, text=f"News {index} of {len(rows)}", font=("Arial", 10)).place(x=24, y=58)
+        open_button = Button(dialog, text="Open Link", width=14, command=lambda link=url: webbrowser.open_new_tab(link) if link else None)
+        open_button.place(x=710, y=20)
+        attach_tooltip(open_button, url)
+
+        Label(dialog, text="News Title", font=("Arial", 11, "bold")).place(x=24, y=100)
+        title_box = Text(dialog, width=98, height=8, relief="solid", bd=1, wrap="word", font=("Times New Roman", 13))
+        title_box.place(x=24, y=126)
+        title_box.insert("1.0", item["headline"])
+
+        Label(dialog, text="News Date", font=("Arial", 11, "bold")).place(x=24, y=284)
+        Entry(dialog, textvariable=date_var, width=28, relief="solid", bd=1, font=("Times New Roman", 13)).place(x=24, y=334)
+
+        def confirm():
+            item["resolved_headline"] = title_box.get("1.0", "end-1c").strip() or item["headline"]
+            item["resolved_date"] = date_var.get().strip() or item["date_raw"]
+            accepted["value"] = True
+            dialog.destroy()
+
+        def cancel():
+            if messagebox.askyesno("Cancel Cross Check", "Cancel the render?", parent=dialog):
+                dialog.destroy()
+
+        Button(dialog, text="OK", width=18, command=confirm).place(x=500, y=334)
+        Button(dialog, text="Cancel", width=18, command=cancel).place(x=670, y=334)
+        dialog.grab_set()
+        dialog.wait_window()
+        if not accepted["value"]:
+            return False
+
+    for item in rows:
+        replace_cell_text(item["headline_cell"], item.get("resolved_headline", item["headline"]))
+        replace_cell_text(item["date_cell"], item.get("resolved_date", item["date_raw"]))
+        strip_bold_from_cell(item["headline_cell"])
+    document.save(file_path)
+    return True
+
 doc = Document(file_path)
+rows = []
+for table in doc.tables:
+    for row in table.rows:
+        if len(row.cells) < 4:
+            continue
+        date_raw = row.cells[0].text.strip()
+        number = row.cells[1].text.strip()
+        headline = row.cells[2].text.strip()
+        url = row.cells[3].text.strip()
+        parsed = urlparse(url) if url else None
+        if not headline:
+            continue
+        rows.append({
+            "date_raw": date_raw,
+            "number": number,
+            "headline": headline,
+            "url": url,
+            "source": parsed.netloc.replace("www.", "") if parsed else "Unknown",
+            "date_cell": row.cells[0],
+            "headline_cell": row.cells[2],
+            "resolved_headline": headline,
+            "resolved_date": date_raw,
+        })
+
+if action_mode == "check":
+    if not run_manual_cross_check(rows, doc):
+        print("Check cancelled.")
+        sys.exit()
+    print("Check is done.")
+    try:
+        done_root = Tk()
+        done_root.withdraw()
+        messagebox.showinfo("Check Complete", "Check is done. The Word file was updated.")
+        done_root.destroy()
+    except Exception:
+        pass
+    sys.exit()
+
 missing_sources = set()
 missing_search_sources = set()
 headline_index = 0
 source_font_indices = {}
 
-for table in doc.tables:
-    for row in table.rows:
-        try:
-            date_raw = row.cells[0].text.strip()
-            number = row.cells[1].text.strip()
-            headline = row.cells[2].text.strip()
-            url = row.cells[3].text.strip()
-            parsed = urlparse(url) if url else None
-            source = parsed.netloc.replace("www.", "") if parsed else "Unknown"
+for item in rows:
+    try:
+        date_raw = item.get("resolved_date", item["date_raw"])
+        number = item["number"]
+        headline = item.get("resolved_headline", item["headline"])
+        url = item["url"]
+        source = item["source"]
+        headline_segments = build_headline_segments(item["headline_cell"])
 
-            if not headline:
-                continue
-            (font_head, font_sub_head), headline_index = headline_fonts_for_source(
-                source,
-                source_font_indices,
-                headline_index,
-            )
+        (font_head, font_sub_head), headline_index = headline_fonts_for_source(
+            source,
+            source_font_indices,
+            headline_index,
+        )
 
-            # filename
-            words = headline.split()[:MAX_FILENAME_WORDS]
-            name_base = re.sub(r'[\/:*?"<>|]', '', f"{number} {' '.join(words)}")[:120]
-            name = name_base
+        words = headline.split()[:MAX_FILENAME_WORDS]
+        name_base = re.sub(r'[\/:*?"<>|]', '', f"{number} {' '.join(words)}")[:120]
+        name = name_base
 
-            # source
-            # get logo
-            logo, used_fallback = get_logo(source, url)
-            if used_fallback:
-                missing_sources.add(missing_logo_name(source))
-                missing_search_sources.add(missing_logo_search_name(source))
+        logo, used_fallback = get_logo(source, url)
+        if used_fallback:
+            missing_sources.add(missing_logo_name(source))
+            missing_search_sources.add(missing_logo_search_name(source))
 
-            save_path = os.path.join(OUTPUT_FOLDER, f"{name}.png")
-            date = normalize_date(date_raw)
+        save_path = os.path.join(OUTPUT_FOLDER, f"{name}.png")
+        date = normalize_date(date_raw)
 
-            # wrap headline with // handled
-            width = MIN_WIDTH
-            for _ in range(10):
-                lines = wrap_headline(headline, font_head, font_sub_head, width)
-                if len(lines) <= 2 or width >= MAX_WIDTH:
-                    break
-                width += 50
+        width = MIN_WIDTH
+        for _ in range(10):
+            lines = wrap_styled_segments(headline_segments, width)
+            if len(lines) <= 2 or width >= MAX_WIDTH:
+                break
+            width += 50
 
-            text_h = sum(f.size + LINE_SPACING for _, f, _ in lines)
-            logo_h = logo.height
-            height = PADDING_TOP + logo_h + 20 + text_h + PADDING_BOTTOM
+        text_h = 0
+        for line in lines:
+            fonts_in_line = [part["font"] for part in line["parts"] if part["text"]]
+            line_height = max((font.size for font in fonts_in_line), default=font_head.size)
+            text_h += line_height + LINE_SPACING + (GAP_BETWEEN_SEGMENTS if line.get("segment_gap_before") else 0)
+        logo_h = logo.height
+        height = PADDING_TOP + logo_h + 20 + text_h + PADDING_BOTTOM
+        max_line_width = 0
+        for line in lines:
+            line_width = sum(text_width(part["font"], part["text"]) for part in line["parts"])
+            max_line_width = max(max_line_width, line_width)
+        date_source_width = text_width(font_date, date) + 10 + text_width(font_source, f" | {source}")
+        logo_plus_spacing = logo.width + 20
+        final_w = max(max_line_width + MARGIN, logo_plus_spacing + date_source_width + MARGIN)
+        final_w += RIGHT_MARGIN
 
-            # compute width
-            max_line_width = max(text_width(f, l) for l, f, c in lines)
-            date_source_width = text_width(font_date, date) + 10 + text_width(font_source, f" | {source}")
-            logo_plus_spacing = logo.width + 20
-            final_w = max(max_line_width + MARGIN, logo_plus_spacing + date_source_width + MARGIN)
-            final_w += RIGHT_MARGIN
-
-            # create image
-            img = Image.new("RGB", (final_w, height), "white")
-            draw = ImageDraw.Draw(img)
-            y = PADDING_TOP
-
-            # paste logo
-            img.paste(logo, (MARGIN, y), logo)
-            logo_bottom = y + logo.height
-
-            # draw date + source
-            dx = MARGIN + logo.width + 20
-            dy = y + (logo.height - FONT_SIZE_DATE)
-            draw.text((dx, dy), date, font=font_date, fill="black")
-            dw = text_width(font_date, date)
-            draw.text((dx + dw + 10, dy), f" | {source}", font=font_source, fill="black")
-
-            # draw headline
-            y_text = logo_bottom + 20
-            prev_font = None
-            for line, f, color in lines:
-                if prev_font and f != prev_font:
-                    y_text += GAP_BETWEEN_SEGMENTS
-                draw.text((MARGIN, y_text), line, font=f, fill=color)
-                y_text += f.size + LINE_SPACING
-                prev_font = f
-
-            img.save(save_path)
-            print("Saved:", save_path)
-
-        except Exception as e:
-            print("Error:", e)
+        img = Image.new("RGB", (final_w, height), "white")
+        draw = ImageDraw.Draw(img)
+        y = PADDING_TOP
+        img.paste(logo, (MARGIN, y), logo)
+        logo_bottom = y + logo.height
+        dx = MARGIN + logo.width + 20
+        dy = y + (logo.height - FONT_SIZE_DATE)
+        draw.text((dx, dy), date, font=font_date, fill="black")
+        dw = text_width(font_date, date)
+        draw.text((dx + dw + 10, dy), f" | {source}", font=font_source, fill="black")
+        y_text = logo_bottom + 20
+        highlight_fill = build_highlight_fill(highlight_color, highlight_opacity)
+        for line in lines:
+            if line.get("segment_gap_before"):
+                y_text += GAP_BETWEEN_SEGMENTS
+            x_text = MARGIN
+            line_fonts = [part["font"] for part in line["parts"] if part["text"]]
+            line_height = max((font.size for font in line_fonts), default=font_head.size)
+            for part in line["parts"]:
+                if not part["text"]:
+                    continue
+                part_width = text_width(part["font"], part["text"])
+                if highlight_bold_text and part.get("bold"):
+                    overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
+                    overlay_draw = ImageDraw.Draw(overlay)
+                    overlay_draw.rounded_rectangle(
+                        (
+                            x_text - HIGHLIGHT_PADDING,
+                            y_text - HIGHLIGHT_PADDING,
+                            x_text + part_width + HIGHLIGHT_PADDING,
+                            y_text + part["font"].size + HIGHLIGHT_PADDING,
+                        ),
+                        radius=4,
+                        fill=highlight_fill,
+                    )
+                    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+                    draw = ImageDraw.Draw(img)
+                draw.text((x_text, y_text), part["text"], font=part["font"], fill=part["color"])
+                x_text += part_width
+            y_text += line_height + LINE_SPACING
+        img.save(save_path)
+        print("Saved:", save_path)
+    except Exception as e:
+        print("Error:", e)
 
 # ---------------- Save missing logos ----------------
 with open(MISSING_LOG_FILE, "w", encoding="utf-8") as f:

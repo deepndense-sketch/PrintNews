@@ -1,0 +1,47 @@
+PrintNews headline font install sources
+Version: 1.0.7
+
+Important:
+Do not copy and send the Windows font files directly unless your font license allows redistribution.
+Most fonts in the current 20-font rotation are Microsoft/Windows fonts. Their original installer is Windows or Microsoft Office, not a separate public installer.
+
+Windows/Microsoft fonts in the current rotation:
+1. Arial Bold - arialbd.ttf
+2. Arial Narrow Bold - ARIALNB.TTF
+3. Impact - impact.ttf
+4. Bahnschrift - bahnschrift.ttf
+5. Calibri Bold - calibrib.ttf
+6. Cambria Bold - cambriab.ttf
+7. Candara Bold - Candarab.ttf
+8. Corbel Bold - corbelb.ttf
+9. Georgia Bold - georgiab.ttf
+10. Segoe UI Bold - segoeuib.ttf
+11. Tahoma Bold - tahomabd.ttf
+12. Times New Roman Bold - timesbd.ttf
+13. Trebuchet MS Bold - trebucbd.ttf
+14. Verdana Bold - verdanab.ttf
+17. Malgun Gothic Bold - malgunbd.ttf
+18. Microsoft JhengHei Bold - msjhbd.ttc
+19. Microsoft YaHei Bold - msyhbd.ttc
+20. Comic Sans MS Bold - comicbd.ttf
+
+How another user gets these:
+- Use Windows 10/11 with current updates.
+- For missing East Asian fonts such as Microsoft JhengHei or Microsoft YaHei, install the related Windows language/optional font feature from Windows Settings.
+- For missing Office-era fonts such as Calibri/Cambria/Candara/Corbel, install Microsoft Office or Microsoft 365.
+
+Official Microsoft font licensing reference:
+https://learn.microsoft.com/en-us/typography/fonts/font-faq
+
+Open-source font in the current rotation:
+15. Source Sans Pro Bold - SourceSansPro-Bold.otf
+16. Source Sans Pro Semibold - SourceSansPro-Semibold.otf
+
+Official Adobe Source Sans download:
+https://github.com/adobe-fonts/source-sans/releases
+
+Official Adobe Fonts page:
+https://fonts.adobe.com/fonts/source-sans-3
+
+Practical note:
+If you need a font pack you can legally give to other users as files, the app should use only open-source fonts instead of Windows/Office fonts.
