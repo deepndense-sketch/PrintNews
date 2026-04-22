@@ -1,6 +1,6 @@
 {
     "download_url":  "https://github.com/deepndense-sketch/PrintNews/raw/main/news_screenshot.exe",
     "channel":  "main",
-    "version":  "1.1.0",
-    "notes":  "Release 1.1.0 keeps note names and logo matching aligned with the new domain style, auto-renames old logo filenames when found, and reuses the same font style per source during each session."
+    "version":  "2.0.1",
+    "notes":  "Release 2.0.1 adds the manual news check workflow, source-list export, skip support, source-link editing, simpler UI updates, and tighter sheet column layout after checking."
 }

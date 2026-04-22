@@ -12,7 +12,7 @@ from tkinter import Tk, Label, Entry, Button, filedialog, StringVar, messagebox,
 from tkinter import colorchooser
 from PIL import Image, ImageDraw, ImageFont
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, Inches
 from io import BytesIO
 import requests
 
@@ -29,7 +29,7 @@ os.makedirs(NOTE_FOLDER, exist_ok=True)
 MISSING_LOG_FILE = os.path.join(NOTE_FOLDER, "missing_logos.txt")
 SETTINGS_FILE = os.path.join(NOTE_FOLDER, "settings.json")
 SUPPORTED_LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".jfif")
-APP_VERSION = "1.1.0"
+APP_VERSION = "2.0.1"
 UPDATE_INFO_URL = "https://raw.githubusercontent.com/deepndense-sketch/PrintNews/main/version.json"
 GITHUB_REPO_OWNER = "deepndense-sketch"
 GITHUB_REPO_NAME = "PrintNews"
@@ -1019,6 +1019,17 @@ def strip_bold_from_cell(cell):
     cell.text = cell.text
 
 
+def apply_table_layout(document):
+    for table in document.tables:
+        table.autofit = False
+        for row in table.rows:
+            if len(row.cells) >= 4:
+                row.cells[0].width = Inches(0.75)
+                row.cells[1].width = Inches(0.55)
+                row.cells[2].width = Inches(6.2)
+                row.cells[3].width = Inches(1.1)
+
+
 def run_manual_cross_check(rows, document):
     for index, item in enumerate(rows, start=1):
         url = item["url"].strip()
@@ -1029,9 +1040,10 @@ def run_manual_cross_check(rows, document):
                 pass
         dialog = Toplevel(root)
         dialog.title(f"Cross Check News {index}")
-        dialog.geometry("860x390")
+        dialog.geometry("860x470")
         dialog.resizable(False, False)
         date_var = StringVar(value=item["date_raw"])
+        link_var = StringVar(value=item["url"])
         accepted = {"value": False}
         Label(dialog, text="Change your news headline and date below", font=("Arial", 16, "bold")).place(x=24, y=20)
         Label(dialog, text=f"News {index} of {len(rows)}", font=("Arial", 10)).place(x=24, y=58)
@@ -1047,9 +1059,25 @@ def run_manual_cross_check(rows, document):
         Label(dialog, text="News Date", font=("Arial", 11, "bold")).place(x=24, y=284)
         Entry(dialog, textvariable=date_var, width=28, relief="solid", bd=1, font=("Times New Roman", 13)).place(x=24, y=334)
 
+        Label(dialog, text="Source Link", font=("Arial", 11, "bold")).place(x=24, y=372)
+        Entry(dialog, textvariable=link_var, width=96, relief="solid", bd=1, font=("Times New Roman", 12)).place(x=24, y=402)
+
         def confirm():
             item["resolved_headline"] = title_box.get("1.0", "end-1c").strip() or item["headline"]
             item["resolved_date"] = date_var.get().strip() or item["date_raw"]
+            item["resolved_url"] = link_var.get().strip() or item["url"]
+            parsed = urlparse(item["resolved_url"]) if item["resolved_url"] else None
+            item["source"] = parsed.netloc.replace("www.", "") if parsed else "Unknown"
+            item["skipped"] = False
+            accepted["value"] = True
+            dialog.destroy()
+
+        def skip_news():
+            item["resolved_headline"] = ""
+            item["resolved_date"] = ""
+            item["resolved_url"] = ""
+            item["source"] = "Unknown"
+            item["skipped"] = True
             accepted["value"] = True
             dialog.destroy()
 
@@ -1057,6 +1085,7 @@ def run_manual_cross_check(rows, document):
             if messagebox.askyesno("Cancel Cross Check", "Cancel the render?", parent=dialog):
                 dialog.destroy()
 
+        Button(dialog, text="Skip This News", width=18, command=skip_news).place(x=330, y=334)
         Button(dialog, text="OK", width=18, command=confirm).place(x=500, y=334)
         Button(dialog, text="Cancel", width=18, command=cancel).place(x=670, y=334)
         dialog.grab_set()
@@ -1065,9 +1094,17 @@ def run_manual_cross_check(rows, document):
             return False
 
     for item in rows:
-        replace_cell_text(item["headline_cell"], item.get("resolved_headline", item["headline"]))
-        replace_cell_text(item["date_cell"], item.get("resolved_date", item["date_raw"]))
-        strip_bold_from_cell(item["headline_cell"])
+        if item.get("skipped"):
+            replace_cell_text(item["date_cell"], "")
+            replace_cell_text(item["number_cell"], "")
+            replace_cell_text(item["headline_cell"], "")
+            replace_cell_text(item["link_cell"], "")
+        else:
+            replace_cell_text(item["headline_cell"], item.get("resolved_headline", item["headline"]))
+            replace_cell_text(item["date_cell"], item.get("resolved_date", item["date_raw"]))
+            replace_cell_text(item["link_cell"], item.get("resolved_url", item["url"]))
+            strip_bold_from_cell(item["headline_cell"])
+    apply_table_layout(document)
     document.save(file_path)
     return True
 
@@ -1091,9 +1128,13 @@ for table in doc.tables:
             "url": url,
             "source": parsed.netloc.replace("www.", "") if parsed else "Unknown",
             "date_cell": row.cells[0],
+            "number_cell": row.cells[1],
             "headline_cell": row.cells[2],
+            "link_cell": row.cells[3],
             "resolved_headline": headline,
             "resolved_date": date_raw,
+            "resolved_url": url,
+            "skipped": False,
         })
 
 if action_mode == "check":
