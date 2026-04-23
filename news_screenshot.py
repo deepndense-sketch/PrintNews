@@ -1016,7 +1016,142 @@ def replace_cell_text(cell, new_text):
 
 
 def strip_bold_from_cell(cell):
-    cell.text = cell.text
+    return
+
+
+def normalize_runs_for_storage(runs):
+    normalized = []
+    for run in runs or []:
+        text = run.get("text", "")
+        if not text:
+            continue
+        bold = bool(run.get("bold"))
+        if normalized and normalized[-1]["bold"] == bold:
+            normalized[-1]["text"] += text
+        else:
+            normalized.append({"text": text, "bold": bold})
+    return normalized
+
+
+def write_runs_to_cell(cell, runs):
+    runs = normalize_runs_for_storage(runs)
+    cell.text = ""
+    paragraph = cell.paragraphs[0]
+    for run in list(paragraph.runs):
+        run._element.getparent().remove(run._element)
+    if not runs:
+        return
+
+    for run_data in runs:
+        pieces = run_data["text"].split("\n")
+        for piece_index, piece in enumerate(pieces):
+            if piece:
+                new_run = paragraph.add_run(piece)
+                new_run.bold = run_data["bold"]
+            if piece_index < len(pieces) - 1:
+                paragraph = cell.add_paragraph()
+
+
+def text_widget_runs(text_widget):
+    raw_text = text_widget.get("1.0", "end-1c")
+    if not raw_text:
+        return []
+
+    def index_to_offset(index):
+        return len(text_widget.get("1.0", index))
+
+    bold_spans = []
+    ranges = text_widget.tag_ranges("bold")
+    for index in range(0, len(ranges), 2):
+        start = index_to_offset(ranges[index])
+        end = index_to_offset(ranges[index + 1])
+        if end > start:
+            bold_spans.append((start, end))
+
+    runs = []
+    buffer = []
+    current_bold = None
+    for char_index, char in enumerate(raw_text):
+        is_bold = any(start <= char_index < end for start, end in bold_spans)
+        if current_bold is None:
+            current_bold = is_bold
+        if is_bold != current_bold:
+            runs.append({"text": "".join(buffer), "bold": current_bold})
+            buffer = [char]
+            current_bold = is_bold
+        else:
+            buffer.append(char)
+    if buffer:
+        runs.append({"text": "".join(buffer), "bold": bool(current_bold)})
+    return normalize_runs_for_storage(runs)
+
+
+def fill_text_widget_with_runs(text_widget, runs):
+    text_widget.delete("1.0", "end")
+    for run in runs or []:
+        start_index = text_widget.index("end-1c")
+        text_widget.insert("end", run.get("text", ""))
+        end_index = text_widget.index("end-1c")
+        if run.get("bold") and text_widget.compare(end_index, ">", start_index):
+            text_widget.tag_add("bold", start_index, end_index)
+
+
+def toggle_text_widget_bold(text_widget):
+    try:
+        selection_start = text_widget.index("sel.first")
+        selection_end = text_widget.index("sel.last")
+    except Exception:
+        return "break"
+
+    if text_widget.tag_nextrange("bold", selection_start, selection_end):
+        text_widget.tag_remove("bold", selection_start, selection_end)
+    else:
+        text_widget.tag_add("bold", selection_start, selection_end)
+    return "break"
+
+
+def undo_text_widget(text_widget):
+    try:
+        text_widget.edit_undo()
+    except Exception:
+        pass
+    return "break"
+
+
+def redo_text_widget(text_widget):
+    try:
+        text_widget.edit_redo()
+    except Exception:
+        pass
+    return "break"
+
+
+def append_news_to_sheet(document, item):
+    target_table = item.get("table")
+    if target_table is None:
+        return
+    new_row = target_table.add_row()
+    if len(new_row.cells) >= 4:
+        replace_cell_text(new_row.cells[0], item.get("resolved_date", item["date_raw"]))
+        replace_cell_text(new_row.cells[1], "")
+        write_runs_to_cell(new_row.cells[2], item.get("resolved_headline_runs", item.get("headline_runs", [])))
+        replace_cell_text(new_row.cells[3], item.get("resolved_url", item["url"]))
+
+
+def collect_dialog_item_values(item, title_box, date_var, link_var):
+    resolved_runs = text_widget_runs(title_box)
+    resolved_headline = "".join(run["text"] for run in resolved_runs).strip() or item["headline"]
+    resolved_date = date_var.get().strip() or item["date_raw"]
+    resolved_url = link_var.get().strip() or item["url"]
+    parsed = urlparse(resolved_url) if resolved_url else None
+    source = parsed.netloc.replace("www.", "") if parsed else "Unknown"
+    return {
+        "resolved_headline_runs": resolved_runs,
+        "resolved_headline": resolved_headline,
+        "resolved_date": resolved_date,
+        "resolved_url": resolved_url,
+        "source": source,
+    }
 
 
 def apply_table_layout(document):
@@ -1045,38 +1180,69 @@ def run_manual_cross_check(rows, document):
         date_var = StringVar(value=item["date_raw"])
         link_var = StringVar(value=item["url"])
         accepted = {"value": False}
-        Label(dialog, text="Change your news headline and date below", font=("Arial", 16, "bold")).place(x=24, y=20)
+        Label(dialog, text="Edit headline, date, and link - bold text for highlight", font=("Arial", 16, "bold")).place(x=24, y=20)
         Label(dialog, text=f"News {index} of {len(rows)}", font=("Arial", 10)).place(x=24, y=58)
         open_button = Button(dialog, text="Open Link", width=14, command=lambda link=url: webbrowser.open_new_tab(link) if link else None)
         open_button.place(x=710, y=20)
         attach_tooltip(open_button, url)
 
         Label(dialog, text="News Title", font=("Arial", 11, "bold")).place(x=24, y=100)
-        title_box = Text(dialog, width=98, height=8, relief="solid", bd=1, wrap="word", font=("Times New Roman", 13))
+        title_box = Text(
+            dialog,
+            width=98,
+            height=8,
+            relief="solid",
+            bd=1,
+            wrap="word",
+            font=("Times New Roman", 13),
+            undo=True,
+            autoseparators=True,
+            maxundo=-1,
+        )
         title_box.place(x=24, y=126)
-        title_box.insert("1.0", item["headline"])
+        title_box.tag_configure("bold", font=("Times New Roman", 13, "bold"))
+        fill_text_widget_with_runs(title_box, item.get("headline_runs", []))
+        title_box.edit_reset()
+        title_box.edit_separator()
 
         Label(dialog, text="News Date", font=("Arial", 11, "bold")).place(x=24, y=284)
         Entry(dialog, textvariable=date_var, width=28, relief="solid", bd=1, font=("Times New Roman", 13)).place(x=24, y=334)
 
         Label(dialog, text="Source Link", font=("Arial", 11, "bold")).place(x=24, y=372)
         Entry(dialog, textvariable=link_var, width=96, relief="solid", bd=1, font=("Times New Roman", 12)).place(x=24, y=402)
+        title_box.bind("<Control-b>", lambda event, box=title_box: toggle_text_widget_bold(box))
+        title_box.bind("<Control-B>", lambda event, box=title_box: toggle_text_widget_bold(box))
+        title_box.bind("<Control-z>", lambda event, box=title_box: undo_text_widget(box))
+        title_box.bind("<Control-Z>", lambda event, box=title_box: undo_text_widget(box))
+        title_box.bind("<Control-y>", lambda event, box=title_box: redo_text_widget(box))
+        title_box.bind("<Control-Y>", lambda event, box=title_box: redo_text_widget(box))
+
+        def flash_add_button():
+            add_to_sheet_button.config(text="Added")
+            dialog.after(700, lambda: add_to_sheet_button.config(text="Add This News To Sheet"))
+
+        def add_this_news_now():
+            values = collect_dialog_item_values(item, title_box, date_var, link_var)
+            item.update(values)
+            append_news_to_sheet(document, item)
+            apply_table_layout(document)
+            document.save(file_path)
+            flash_add_button()
 
         def confirm():
-            item["resolved_headline"] = title_box.get("1.0", "end-1c").strip() or item["headline"]
-            item["resolved_date"] = date_var.get().strip() or item["date_raw"]
-            item["resolved_url"] = link_var.get().strip() or item["url"]
-            parsed = urlparse(item["resolved_url"]) if item["resolved_url"] else None
-            item["source"] = parsed.netloc.replace("www.", "") if parsed else "Unknown"
+            item.update(collect_dialog_item_values(item, title_box, date_var, link_var))
+            item["append_to_sheet"] = False
             item["skipped"] = False
             accepted["value"] = True
             dialog.destroy()
 
         def skip_news():
+            item["append_to_sheet"] = False
             item["resolved_headline"] = ""
             item["resolved_date"] = ""
             item["resolved_url"] = ""
             item["source"] = "Unknown"
+            item["resolved_headline_runs"] = []
             item["skipped"] = True
             accepted["value"] = True
             dialog.destroy()
@@ -1085,9 +1251,14 @@ def run_manual_cross_check(rows, document):
             if messagebox.askyesno("Cancel Cross Check", "Cancel the render?", parent=dialog):
                 dialog.destroy()
 
-        Button(dialog, text="Skip This News", width=18, command=skip_news).place(x=330, y=334)
-        Button(dialog, text="OK", width=18, command=confirm).place(x=500, y=334)
-        Button(dialog, text="Cancel", width=18, command=cancel).place(x=670, y=334)
+        Button(dialog, text="Bold Selected Text", width=18, command=lambda box=title_box: toggle_text_widget_bold(box)).place(x=250, y=96)
+        Button(dialog, text="Undo", width=10, command=lambda box=title_box: undo_text_widget(box)).place(x=430, y=96)
+        Button(dialog, text="Redo", width=10, command=lambda box=title_box: redo_text_widget(box)).place(x=520, y=96)
+        add_to_sheet_button = Button(dialog, text="Add This News To Sheet", width=24, command=add_this_news_now)
+        add_to_sheet_button.place(x=610, y=96)
+        Button(dialog, text="Remove This News From Sheet", width=24, command=skip_news).place(x=315, y=334)
+        Button(dialog, text="OK", width=16, command=confirm).place(x=540, y=334)
+        Button(dialog, text="Cancel", width=16, command=cancel).place(x=700, y=334)
         dialog.grab_set()
         dialog.wait_window()
         if not accepted["value"]:
@@ -1100,10 +1271,12 @@ def run_manual_cross_check(rows, document):
             replace_cell_text(item["headline_cell"], "")
             replace_cell_text(item["link_cell"], "")
         else:
-            replace_cell_text(item["headline_cell"], item.get("resolved_headline", item["headline"]))
+            write_runs_to_cell(item["headline_cell"], item.get("resolved_headline_runs", item.get("headline_runs", [])))
             replace_cell_text(item["date_cell"], item.get("resolved_date", item["date_raw"]))
             replace_cell_text(item["link_cell"], item.get("resolved_url", item["url"]))
             strip_bold_from_cell(item["headline_cell"])
+        if item.get("append_to_sheet"):
+            append_news_to_sheet(document, item)
     apply_table_layout(document)
     document.save(file_path)
     return True
@@ -1125,15 +1298,19 @@ for table in doc.tables:
             "date_raw": date_raw,
             "number": number,
             "headline": headline,
+            "headline_runs": extract_row_runs(row.cells[2]),
             "url": url,
             "source": parsed.netloc.replace("www.", "") if parsed else "Unknown",
+            "table": table,
             "date_cell": row.cells[0],
             "number_cell": row.cells[1],
             "headline_cell": row.cells[2],
             "link_cell": row.cells[3],
             "resolved_headline": headline,
+            "resolved_headline_runs": extract_row_runs(row.cells[2]),
             "resolved_date": date_raw,
             "resolved_url": url,
+            "append_to_sheet": False,
             "skipped": False,
         })
 
