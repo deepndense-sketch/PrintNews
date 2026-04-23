@@ -29,7 +29,7 @@ os.makedirs(NOTE_FOLDER, exist_ok=True)
 MISSING_LOG_FILE = os.path.join(NOTE_FOLDER, "missing_logos.txt")
 SETTINGS_FILE = os.path.join(NOTE_FOLDER, "settings.json")
 SUPPORTED_LOGO_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".ico", ".jfif")
-APP_VERSION = "2.1.0"
+FALLBACK_APP_VERSION = "2.1.1"
 UPDATE_INFO_URL = "https://raw.githubusercontent.com/deepndense-sketch/PrintNews/main/version.json"
 GITHUB_REPO_OWNER = "deepndense-sketch"
 GITHUB_REPO_NAME = "PrintNews"
@@ -86,25 +86,121 @@ def is_newer_version(remote_version, current_version):
     return remote_parts > current_parts
 
 
+def compare_versions(left_version, right_version):
+    left_parts = version_parts(left_version)
+    right_parts = version_parts(right_version)
+    length = max(len(left_parts), len(right_parts))
+    left_parts += [0] * (length - len(left_parts))
+    right_parts += [0] * (length - len(right_parts))
+    if left_parts > right_parts:
+        return 1
+    if left_parts < right_parts:
+        return -1
+    return 0
+
+
+def parse_build_timestamp(value):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+def format_display_version(version, build=""):
+    version = str(version or "").strip() or FALLBACK_APP_VERSION
+    build = str(build or "").strip()
+    return f"{version}+{build}" if build else version
+
+
+def compare_build_info(left_info, right_info):
+    version_compare = compare_versions(left_info.get("version", ""), right_info.get("version", ""))
+    if version_compare != 0:
+        return version_compare
+
+    left_time = parse_build_timestamp(left_info.get("built_at"))
+    right_time = parse_build_timestamp(right_info.get("built_at"))
+    if left_time and right_time:
+        if left_time > right_time:
+            return 1
+        if left_time < right_time:
+            return -1
+
+    left_build = str(left_info.get("build", "")).strip()
+    right_build = str(right_info.get("build", "")).strip()
+    if left_build and right_build:
+        if left_build > right_build:
+            return 1
+        if left_build < right_build:
+            return -1
+    return 0
+
+
+def load_local_version_info():
+    version_file = os.path.join(BASE_DIR, "version.json")
+    try:
+        with open(version_file, "r", encoding="utf-8-sig") as f:
+            info = json.load(f)
+        version = str(info.get("version", "")).strip() or FALLBACK_APP_VERSION
+        build = str(info.get("build", "")).strip()
+        built_at = str(info.get("built_at", "")).strip()
+        return {
+            "version": version,
+            "build": build,
+            "built_at": built_at,
+            "display_version": format_display_version(version, build),
+        }
+    except Exception:
+        return {
+            "version": FALLBACK_APP_VERSION,
+            "build": "",
+            "built_at": "",
+            "display_version": FALLBACK_APP_VERSION,
+        }
+
+
+LOCAL_VERSION_INFO = load_local_version_info()
+APP_VERSION = LOCAL_VERSION_INFO["version"]
+APP_DISPLAY_VERSION = LOCAL_VERSION_INFO["display_version"]
+
+
 def fetch_update_info():
-    response = requests.get(UPDATE_INFO_URL, timeout=6)
+    response = requests.get(
+        UPDATE_INFO_URL,
+        headers={**REQUEST_HEADERS, "Cache-Control": "no-cache", "Pragma": "no-cache"},
+        params={"t": datetime.utcnow().strftime("%Y%m%d%H%M%S")},
+        timeout=6,
+    )
     response.raise_for_status()
     info = json.loads(response.content.decode("utf-8-sig"))
     latest_version = str(info.get("version", "")).strip()
+    latest_build = str(info.get("build", "")).strip()
+    latest_built_at = str(info.get("built_at", "")).strip()
+    remote_info = {
+        "version": latest_version,
+        "build": latest_build,
+        "built_at": latest_built_at,
+        "display_version": format_display_version(latest_version, latest_build),
+    }
     return {
         "version": latest_version,
+        "build": latest_build,
+        "built_at": latest_built_at,
+        "display_version": remote_info["display_version"],
         "notes": str(info.get("notes", "")).strip(),
         "download_url": str(info.get("download_url", "")).strip(),
-        "is_newer": bool(latest_version and is_newer_version(latest_version, APP_VERSION)),
+        "is_newer": bool(latest_version and compare_build_info(remote_info, LOCAL_VERSION_INFO) > 0),
     }
 
 
 def check_for_updates(show_current=False):
     try:
         info = fetch_update_info()
-        latest_version = info["version"]
+        latest_version = info["display_version"]
         if info["is_newer"]:
-            message = f"Update available to version {latest_version}.\n\nCurrent version: {APP_VERSION}\nLatest version: {latest_version}"
+            message = f"Update available to version {latest_version}.\n\nCurrent version: {APP_DISPLAY_VERSION}\nLatest version: {latest_version}"
             if info["notes"]:
                 message += f"\n\nWhat is updated:\n{info['notes']}"
             if info["download_url"]:
@@ -112,7 +208,7 @@ def check_for_updates(show_current=False):
             messagebox.showinfo("Update Available", message)
         elif show_current:
             latest_label = latest_version or "unknown"
-            messagebox.showinfo("No Update", f"No update available.\n\nCurrent version: {APP_VERSION}\nLatest version: {latest_label}")
+            messagebox.showinfo("No Update", f"No update available.\n\nCurrent version: {APP_DISPLAY_VERSION}\nLatest version: {latest_label}")
     except Exception:
         if show_current:
             messagebox.showwarning("Update Check Failed", "Could not check for updates right now.")
@@ -124,14 +220,16 @@ update_info = None
 def update_button_from_info(info=None, error=None):
     global update_info
     if error:
-        update_button.config(text="Update check failed")
+        update_button.config(text="GitHub check failed")
         return
     update_info = info
-    latest_version = info.get("version") or APP_VERSION
-    if info.get("is_newer"):
+    latest_version = info.get("display_version") or APP_DISPLAY_VERSION
+    comparison = compare_build_info(info, LOCAL_VERSION_INFO)
+    if comparison > 0:
         update_button.config(text=f"Update to {latest_version}")
     else:
-        update_button.config(text=f"Latest version {latest_version}")
+        display_version = APP_DISPLAY_VERSION if comparison < 0 else latest_version
+        update_button.config(text=f"Latest {display_version}")
 
 
 def run_update_button_check():
@@ -149,7 +247,7 @@ def start_update_button_check():
 
 def install_update(info):
     download_url = info.get("download_url")
-    latest_version = info.get("version")
+    latest_version = info.get("display_version") or info.get("version")
     if not download_url:
         root.after(0, messagebox.showwarning, "Update Failed", "The update file link is missing.")
         return
@@ -573,7 +671,7 @@ def run_check_only():
 settings = load_settings()
 
 root = Tk()
-root.title(f"News Image Generator v{APP_VERSION}")
+root.title(f"News Image Generator v{APP_DISPLAY_VERSION}")
 root.geometry("760x380")
 root.resizable(False, False)
 

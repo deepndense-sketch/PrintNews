@@ -1,6 +1,8 @@
 {
     "download_url":  "https://github.com/deepndense-sketch/PrintNews/raw/main/news_screenshot.exe",
     "channel":  "main",
-    "version":  "2.1.0",
-    "notes":  "Release 2.1.0 adds the manual news check workflow, source-list export, skip support, source-link editing, headline bold editing with highlight support, add-to-sheet from check mode, undo and redo controls, and cleaner check dialog button layout."
+    "version":  "2.1.1",
+    "build":  "20260423125503",
+    "built_at":  "2026-04-23T12:55:03.3649987+08:00",
+    "notes":  "Release 2.1.1 adds build metadata tracking, manual news check workflow improvements, source-list export, skip support, source-link editing, headline bold editing with highlight support, add-to-sheet from check mode, undo and redo controls, and cleaner check dialog button layout."
 }
